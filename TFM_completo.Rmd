@@ -1,0 +1,1986 @@
+---
+title: "TFM. Predicción de pacientes DB,IS y IR aplicando IA sobre genes obtenidos de un análisis de expresión diferencial"
+author: "Jesús María González Martín"
+date: "`r format(Sys.time(), '%d %B, %Y')`"
+output:
+  html_document:
+    toc: yes
+    toc_depth: '2'
+    df_print: paged
+  prettydoc::html_pretty:
+    toc: yes
+    theme: cayman
+    highlight: github
+    number_sections: yes
+  pdf_document:
+    toc: yes
+    toc_depth: 2
+params:
+  proporc: 0.70
+  repetic: 1000
+  hiddenA: 30
+  hiddenB: 20
+bibliography: references.bib
+biblio-style: plainnat
+nocite: '@*'
+---
+
+```{r setup, include=FALSE}
+library(knitr)
+knitr::opts_chunk$set(echo = TRUE, message = FALSE, warning = FALSE, 
+                      comment = NA, prompt = TRUE, tidy = FALSE, 
+                      fig.width = 7, fig.height = 7, fig_caption = TRUE,
+                      cache=FALSE)
+Sys.setlocale("LC_TIME", "C")
+```
+
+```{r echo=FALSE}
+if(!(require(printr))) {
+  install.packages(
+    'printr',
+    type = 'source',
+    repos = c('http://yihui.name/xran', 'http://cran.rstudio.com')
+  )
+}
+```
+
+```{r installBioC, message=FALSE, warning=FALSE, eval=TRUE}
+if (!requireNamespace("BiocManager", quietly = TRUE))
+  install.packages("BiocManager")
+BiocManager::install()
+
+```
+
+```{r installPackages, message=FALSE, warning=FALSE}
+if(require("data.table")==FALSE){install.packages("data.table")}
+library(data.table)
+if(require("lubridate")==FALSE){install.packages("lubridate")}
+library(lubridate)
+if(require("Matrix")==FALSE){install.packages("Matrix")}
+library(Matrix)
+if(require("mvtnorm")==FALSE){install.packages("mvtnorm")}
+library(mvtnorm)
+if(require("survival")==FALSE){install.packages("survival")}
+library(survival)
+if(require("lattice")==FALSE){install.packages("lattice")}
+library(lattice)
+if(require("mgcv")==FALSE){install.packages("mgcv")}
+library(mgcv)
+if(require("nlme")==FALSE){install.packages("nlme")}
+library(nlme)
+if(require("survival")==FALSE){install.packages("survival")}
+library(survival)
+if(require("knitr")==FALSE){install.packages("knitr")}
+library(knitr)
+if(require("colorspace")==FALSE){install.packages("colorspace")}
+library(colorspace)
+if(require("ggplot2")==FALSE){install.packages("ggplot2")}
+library(ggplot2)
+if(require("ggrepel")==FALSE){install.packages("ggrepel")}
+library(ggrepel)
+if(require("htmlTable")==FALSE){install.packages("htmlTable")}
+library(htmlTable)
+if(require("prettydoc")==FALSE){install.packages("prettydoc")}
+library(prettydoc)
+if(require("devtools")==FALSE){install.packages("devtools")}
+library(devtools)
+if(require("tibble")==FALSE){install.packages("tibble")}
+library(tibble)
+if(require("vctrs")==FALSE){install.packages("vctrs")}
+library(vctrs)
+
+#BiocManager::install("GenomeInfoDbData")
+BiocManager::install("oligoClasses")
+BiocManager::install("oligo")
+BiocManager::install("GEOquery")
+BiocManager::install("affyio")
+#BiocManager::install("pd.mogene.2.1.st")
+BiocManager::install("arrayQualityMetrics")
+#BiocManager::install("pvca")
+# NOT NEEDED UNTIL ANALYSES ARE PERFORMED
+BiocManager::install("limma")
+BiocManager::install("genefilter")
+BiocManager::install("hgu95av2.db")
+BiocManager::install("pd.hg.u95a.db")
+BiocManager::install("annotate")
+BiocManager::install("org.Hs.eg.db")
+BiocManager::install("ReactomePA")
+BiocManager::install("reactome.db")
+BiocManager::install("DO.db")
+BiocManager::install("GOstats")
+BiocManager::install("GO.db")
+
+if(require("utf8")==FALSE){install.packages("utf8")}
+library(utf8)
+if(require("tweenr")==FALSE){install.packages("tweenr")}
+library(tweenr)
+```
+
+# Parte 1. Análisis de datos ómicos
+
+## Introducción
+
+Este documento corresponde la trabajo de fin de grado asociado al Máster en bioinformática y bioestadística de la uoc. El presenta análisis se puedes desglosar en dos partes. En la primera parte se realiza el análisis de datos de microarrayas, donde el objetivo es obtener aquellos genes que se expresen de forma diferencial entre tres grupos de pacientes (insulina sensibles, insulina resistentes y diabéticos). Además, también se realiza el análisis clásico de datos de microarrays (significación biológica, heatmaps, etc.). En la segunda parte, se utilizar este conjunto de datos como fichero de entrada para realizar modelos predictivos utilizando técnicas de Machine Learning para clasificar a los pacientes en las tres categorías descritas previamente. 
+
+
+## Contexto y Objetivos
+
+
+La insulina es una potente hormona pleiotrópica que afecta a los procesos como el crecimiento celular, la diferenciación, la apoptosis, el flujo de iones, el gasto energético y el metabolismo de carbohidratos, lípidos y proteínas. Estas acciones diversas se inician por la unión específica a receptores de alta afinidad en la membrana plasmática de las células diana, que luego activan tanto una vía de señalización metabólica a través de la quinasa PI-3 como una vía mitogénica a través de la cascada Ras/MAPK.
+La señal mediada por insulina se ha estudiado extensamente en lo que se refiere a eventos tempranos en la traducción de genes. Sin embargo, carecemos de una comprensión de los eventos más distales en la señalización de la insulina que involucran varios sistemas efectores y de los efectos integrados sobre la expresión génica que subyacen a las acciones múltiples de la hormona. Ahora es posible una evaluación completa de la expresión diferencial en respuesta a la insulina utilizando la tecnología de microarrays. Este conocimiento podría mejorar nuestra comprensión de la acción de la insulina y cómo se integran las respuestas para mediar en el espectro de efectos hormonales.
+El músculo esquelético es el sitio principal para la eliminación de la glucosa insulinodependiente en los seres humanos. La insulina estimula la captación y el uso de glucosa en las vías oxidativas y de almacenamiento. Aproximadamente el 80% de la captación de glucosa que responde a la insulina afecta a los músculos esqueléticos y este tejido es el sitio principal de almacenamiento de glucógeno, oxidación de lípidos, recambio de proteínas y termogénesis. La resistencia a la insulina que involucra al músculo esquelético es fundamental en la patogénesis de las enfermedades humanas, incluido el síndrome metabólico y la diabetes tipo 2, que causan una gran y creciente carga para la salud pública. Los mecanismos moleculares por los que la insulina regula el metabolismo muscular y los defectos subyacentes que causan la resistencia a la insulina no se han dilucidado por completo.
+
+El objetivo de este trabajo es realizar un análisis de datos de microarrays para encontrar genes diferencialmente expresados. El análisis se basará en los datos de un estudio depositado en Gene Expresion Omnibus (GEO) con identificador ***“GSE22309”*** y cuyo título es "Expression data from human skeletal muscle" (datos de expresión del músculo esquelético humano). Estos datos contienen muestras de tres tipos de pacientes después de realizar un tratamiento con insulina. En particular los datos son los siguientes:
+
+* 20 pacientes insulina-sensibles (IS)
+* 20 pacientes insulina-resistentes (IR) 
+* 15 pacientes diabéticos (DB)
+
+Por lo tanto, el objetivo específico será llevar a cabo las tres comparaciones posibles: 
+
+* IS vs IR
+* IS vs DB
+* IR vs DB
+
+y encontrar qué genes se expresan de forma diferencial en las comparaciones dos a dos. 
+
+## Materiales y métodos
+
+
+Se tomaron biopsias de muestras de músculo esquelético humano de diferentes individuos después del tratamiento con insulina para la extracción e hibridación de ARN en microarrays de Affymetrix.
+	
+Los valores crudos de expresión obtenidos directamente de los archivos CEL se pre-procesaron utilizando el método de RMA (Irizarry et al. 2003), un proceso de tres pasos que integra la corrección de fondo, la normalización y el resumen de los valores del grupo de sondas en un único valor de expresión absoluta. Dichos valores normalizados fueron la base para todos los análisis.
+
+Antes de la selección de genes los valores normalizados se sometieron a un filtraje no específico para eliminar los genes de baja señal (los genes cuya media de la señal en cada grupo no supera un umbral mínimo) y los genes de baja variabilidad (los genes cuyo rango intercuartil entre todas las muestras no superó un umbral mínimo).
+
+La selección de genes diferencialmente expresados entre condiciones experimentales se baso en la utilización de modelos lineales complementados con una moderación de la varianza mediante métodos bayesianos empíricos siguiendo la metodología desarrollada por Smyth (Smyth 2004). Este método extiende el análisis de la varianza clásico utilizando métodos Bayesianos empíricos para combinar la información de cada gen individual con la de todos los genes restantes para obtener mejores estimaciones de error. Esto es de gran utilidad en análisis de microarrays, un contexto en el que el tamaño de las muestras es a menudo pequeño lo que puede dar lugar a estimaciones de los errores erráticos y, en consecuencia, p-valores que no son de fiar.
+
+Los genes más relevantes de cada comparación se resaltaron utilizando volcano-plots, que organizan los genes a lo largo de dos dimensiones que podemos considerar de importancia biológica y estadística. El eje horizontal representa el cambio medio de expresión entre los dos grupos (en una escala logarítmica, por lo que la regulación hacia arriba y abajo aparecen simétrica), y el segundo (vertical) representa el menos logaritmo del p-valor por lo que los genes cuyo p-valor asociado sea inferior aparecen más arriba. El primer eje indica el impacto biológico del cambio, y el segundo indica la evidencia estadística, o la fiabilidad de dicho cambio.
+
+Con el fin de hacer frente a la problemática derivada del hecho de que muchas pruebas (una por cada gen) se realizan simultáneamente, se realizo un ajuste de p–valores para obtener control sobre la tasa de falsos positivos usando el método de Benjamini y Hochberg (Benjamini and Hochberg 1995). 
+
+Los genes seleccionados como diferencialmente expresados se agruparon para buscar patrones comunes de expresión entre condiciones experimentales. Para ello se utilizaron mapas de colores o Heatmaps que realizan una agrupación jerárquica de los genes y/o las muestras y la representan mediante una gama de colores apropiada, de forma que valores altos o bajos se corresponden a colores distintos de la gama escogida. 
+
+Las listas de genes diferencialmente expresados se anotaron en diversas bases de datos (Entrez, Unigene,
+Gene Ontology, KEGG, etc.) utilizando los paquetes de anotación para microarrays de affymetrix disponibles
+en el proyecto Bioconductor http://bioconductor.org.
+
+Para contribuir a la interpretación biológica de los resultados se realizó un análisis de enriquecimiento (Falcon and Gentleman 2007) que busca establecer si las categorías funcionales de los genes seleccionados aparecen entre estos genes con mayor (o menor) frecuencia que entre todos los del genoma. De ser así se indica que la lista de genes se encuentra “enriquecida” en estas funcionalidades, o lo que es lo mismo que los procesos afectados por las diferencias son éstos.
+
+
+## Herramientas y procedimientos bioinformáticos de análisis
+
+Los análisis estadísticos se realizaron utilizando el lenguaje estadístico R y las librerías desarrolladas para el análisis de microarray en el proyecto de Bioconductor.
+El código siguiente se utilizó para instalar los paquetes de Bioconductor necesarios para el análisis.
+
+## Obtención y lectura de los datos
+
+Este estudio cuenta con 55 muestras, 20 muestras asociadas a pacientes IS, 20 muestras asociadas a pacientes IR y 15 muestras asociadas a pacientes DB. 
+
+Los datos crudos pueden descargarse de GEO directamente accediendo a la dirección: 
+https://www.ncbi.nlm.nih.gov/geo/query/acc.cgi?acc=GSE22309 donde se pueden descargar de forma individual o en un archivo comprimido:
+
+
+![](C:/Users/josue/Documents/AA_UOC/4_Semestre_2021_09/Ejecucion/Foto_Descarga archivos.jpg){width=70%}
+
+## Tipo de microarray (plataforma)
+
+Para trabajar con microarrays, necesitamos conocer de que tipo son, puesto que ello nos permite saber qué paquete de anotaciones necesitamos Esta información se encuentra también en la página de GEO correspondiente a los datos:
+
+
+![](C:/Users/josue/Documents/AA_UOC/4_Semestre_2021_09/Ejecucion/Foto_Tipo_microarray.jpg){width=70%}
+
+
+Esto nos indica que se trata de arrays del modelo Hu95A de Affymetrix, cuyas anotaciones se encuentran en el paquete hgu95av2.db de Bioconductor.
+
+## Carga de los datos
+
+El análisis se basará en los datos de un estudio depositado en Gene Expresion Omnibus (GEO) con identificador ***“GSE22309”*** y cuyo título es "Expression data from human skeletal muscle" (datos de expresión del músculo esquelético humano).
+ 
+La lectura de datos se lleva a cabo utilizando las clases y métodos definidas en los paquetes Biobase y oligo de Bioconductor. Una forma cómoda de leer los datos y, al mismo tiempo, asignar a cada muestra los valores de las covariables (por ejemplo el grupo para el análisis) consiste en crear un pequeño archivo de texto, que suele denominarse targets.csv y que contiene la identificación de cada archivo con la asignación de cada
+muestra a cada condición experimental.
+
+El contenido del archivo targets se utiliza en la lectura de los datos y la creación del objeto rawData las intensidades “crudas” de cada archivo .CEL.
+
+
+```{r read_csv}
+
+myTargets <-read.csv(file="./data/targets.csv", row.names = 1, head=TRUE,sep=";")
+
+```
+
+
+```{r tabla}
+knitr::kable( myTargets, booktabs = TRUE, caption = 'Targets del fichero utilizados para el presente análisis')
+```
+
+## Caracteristicas de los archivos CEL y lectura archivos CEL
+
+En primer lugar, se muestran las características de los archivos CEL descritas en GEO, se puede comprobar que hay 112 muestras, pero hay que tener en cuenta que en este análisis se han trabajado con 55 de ellas, correspondientes a las muestras tomadas después del tratamiento con insulina. A modo descriptivo, también se muestran las características de la primera muestra de cada uno de los 3 tipos de pacientes (IS, IR y DB): 
+
+```{r Caracteristicas archivos CEL, warning=FALSE, echo=FALSE, EVAL=TRUE}
+library(GEOquery)
+Sys.setenv("VROOM_CONNECTION_SIZE" = 131072 * 2)
+gse<-getGEO("GSE22309", GSEMatrix = FALSE)
+#Meta(gse)
+```
+
+
+Características de la muestra GSM555238 (primer registro post-insulina y que pertenece al grupo insulina-sensible):
+
+```{r Caracteristicas primera muestra IS, EVAL=TRUE}
+GSMList(gse)[[2]]
+
+```
+
+Características de la muestra GSM555278 (primer registro post-insulina y que pertenece al grupo insulina-resistente):
+
+```{r Caracteristicas primera muestra IR, EVAL=TRUE}
+GSMList(gse)[[42]]
+
+```
+Características de la muestra GSM555318 (primer registro post-insulina y que pertenece al grupo diabetes):
+
+```{r Caracteristicas primera muestra DB, EVAL=TRUE}
+GSMList(gse)[[82]]
+
+```
+
+
+## Lectura archivos CEL
+En este apartado leemos los 55 archivos .CEL (registros post-insulina) y los unimos al fichero targets con la muestra seleccionada. Este objeto es la base para todos los análisis que se realizarán:  
+
+
+```{r ReadCELfiles, message=FALSE, results='hide', warning=FALSE}
+library(oligo)
+library(Biobase)
+library(oligoClasses)
+#####
+celFiles <- list.celfiles("./data", full.names = TRUE)
+my.targets <-read.AnnotatedDataFrame(file.path("./data","targets.csv"),   header = TRUE, row.names = 1,  sep=";") 
+rawData <- read.celfiles(celFiles, phenoData = my.targets)
+head(rawData)
+
+```
+
+A continuación, cambiamos los nombres de los genes por otros asociados a los $targets$, combinación del título y cariotipo: 
+
+```{r ChangeName}
+rownames(pData(rawData))<-my.targets@data$Name
+colnames(rawData) <-rownames(pData(rawData)) 
+dim(exprs(rawData))
+```
+
+
+## Exploración y control de calidad de los datos crudos
+
+Pasamos a comprobar si los datos crudos ***son buenos***, es decir, tienen calidad y pueden ser útiles para continuar con el proceso: 
+
+La exploración de los datos suele basarse en técnicas univariantes como los histogramas o los diagramas de caja o en técnicas multivariantes como los análisis de conglomerados (clusters), de distancias o de análisis de componentes principales.
+
+
+Para empezar con la descripción gráfica de los datos, realizamos un diagrama de cajas y bigotes: 
+
+```{r BoxplotRaw, message=FALSE, fig.cap="Boxplot for arrays intensities (Raw Data)"}
+boxplot(rawData, cex.axis=0.5, las=2,  which="all", 
+         col = c(rep("green", 20),rep("blue", 20), rep("red", 15) ),
+         main="Distribution of raw intensity values")
+
+
+hist(rawData, main="Signal distribution", col = c(rep("green", 20),rep("blue", 20), rep("red", 15)),
+     lty=1:nrow(pData(rawData)))
+legend(x="topright", legend=  pData(rawData)$Name ,col = c(rep("green", 20),rep("blue", 20), rep("red", 15)),
+     lty=1:nrow(pData(rawData)), cex=0.45)
+```
+
+El histograma y el diagrama de caja muestran que las distribuciones de los datos son similares en formas pero no en posición, lo que ya sugiere que será preciso algún tipo de centrado.
+
+Para ser más exhaustivos, realizamos un análisis de componentes principales, donde creamos una función específica: 
+
+
+```{r funcion_pca}
+library(ggplot2)
+library(ggrepel)
+plotPCA3 <- function (datos, labels, factor, title, scale,colores, size = 1.5, glineas = 0.25) {
+  data <- prcomp(t(datos),scale=scale)
+  # plot adjustments
+  dataDf <- data.frame(data$x)
+  Group <- factor
+  loads <- round(data$sdev^2/sum(data$sdev^2)*100,1)
+  # main plot
+  p1 <- ggplot(dataDf,aes(x=PC1, y=PC2)) +
+    theme_classic() +
+    geom_hline(yintercept = 0, color = "gray70") +
+    geom_vline(xintercept = 0, color = "gray70") +
+    geom_point(aes(color = Group), alpha = 0.55, size = 3) +
+    coord_cartesian(xlim = c(min(data$x[,1])-5,max(data$x[,1])+5)) +
+    scale_fill_discrete(name = "Group")
+  # avoiding labels superposition
+  p1 + geom_text_repel(aes(y = PC2 + 0.25, label = labels),segment.size = 0.25, size = size) + 
+    labs(x = c(paste("PC1",loads[1],"%")),y=c(paste("PC2",loads[2],"%"))) +  
+    ggtitle(paste("Principal Component Analysis for: ",title,sep=" "))+ 
+    theme(plot.title = element_text(hjust = 0.5)) +
+    scale_color_manual(values=colores)
+  }
+```
+
+
+```{r PCARaw, message=FALSE, fig.cap="Visualization of the two first Principal Components for raw data"}
+plotPCA3(exprs(rawData), labels = my.targets@data$Name, factor = my.targets@data$Group, 
+         title="Raw data", scale = FALSE, size = 3, 
+         colores = c("red", "blue", "green"))
+```
+
+En la figura Superior se puede observar los dos componentes principales del análisis de componentes principales. Los arrays aparecen identificados por sus respectivos nombres y agrupados por grupo. La representación de los datos en las dos primeras componentes principales muestra que no hay una separación clara entre los grupos IR y DB. Sí que aparecen más separados el grupo de IS. Es posible que exista algún efecto efecto batch que explique la diferencia (se analiza posteriormente). 
+
+Un cluster jerárquico refuerza la impresión de que los grupos DB e IR están mezclados, mientrás que el grupo IS está separado respecto de las otras dos categorías: 
+
+```{r cluster, message=FALSE, fig.cap="Hierarchical clustering of samples"}
+clust.euclid.average <- hclust(dist(t(exprs(rawData))), method = "average")
+plot(clust.euclid.average, labels = colnames(exprs(rawData)), main = "Hierarchical clustering of samples",hang = -1, cex=0.7)
+
+```
+
+Se puede observar que las muestras de IS están separadas del IR y DB, a excepción del grupo de IR_11 a IR_17. 
+
+El paquete arrayQualitMetrics encapsula todos los análisis anteriores, y alguno más, facilitando su ejecución e incluso su interpretación. La instrucción arrayQualityMetrics lleva a cabo todos los análisis de una vez y genera un informe de resultados con ayudas a la interpretación y a la detección de arrays problemáticos.
+Los resultados del control de calidad realizado con arrayQualityMetrics se encuentran accesibles a través del
+archivo index.html contenido en el subdirectorio creado al invocarlo, en este caso denominado **arrayQualityMetrics report for rawData**.
+
+
+```{r QCRaw, EVAL=TRUE}
+library(arrayQualityMetrics)
+#dir.create("results")
+arrayQualityMetrics(rawData, force=TRUE,outdir = "results/arrayQualityMetrics report for rawData")
+```
+
+Observando la figura inferior que aparece en el archivo _index.html_, podemos observar que hay un grupo de arrays asociados a Insulina Resistentes que pueden presentar problemas ya que tienen tres ***x*** marcadas. El resto, tiene una o ninguna (a excepción del DB_14 que presenta dos). Continuamos con todos ellos. 
+
+```{r QCRawDataRes, fig.cap="Aspect of the summary table, in the index.html file, produced by the arrayQualityMetrics package on the raw data", echo=FALSE}
+knitr::include_graphics("Figura_calidad.jpg")
+```
+
+## Análisis de efectos batch
+
+Los análisis de componentes principales sugieren que puede haber algún factor que se superponga a las diferencias entre los grupos. Dado que no se dispone de información sobre otras covariables es difícil decidir si ésto es así. Una causa habitual del efectos batch es la fecha en que se procesan las muestras.
+Es posible obtener la fecha de hibridación de los archivos .CEL mediante la función get.celfile.dates del paquete affyio.
+
+```{r Fechas}
+library(affyio)
+get.celfile.dates(celFiles)
+HybDates <- as.factor(get.celfile.dates(celFiles))
+table(HybDates, pData(rawData)$Group)
+```
+
+El día 2001-01-10 se analizarón los registros IR_9 hasta IR_17, teniendo en cuenta que los registros IR_11 hasta IR_17 son los que aparecen los más alejados en el gráfico de ACP. 
+El día 2001-02-06 se analizarón los registros DB_13, DB_14, DB_15 y DB_4, que es el otro registro que aparece más alejado en el gráfico de ACP. Es posible que haya algún efecto Batch asociado a las fechas de hibridación. 
+
+## Normalización
+
+```{r Normalization}
+eset_rma <- rma(rawData)
+eset_rma
+
+```
+
+
+## Control de calidad de los datos normalizados
+
+Volvemos a realizar las comprobaciones gráficas con los datos normalizados: 
+
+```{r arrayq}
+library(arrayQualityMetrics)
+arrayQualityMetrics(eset_rma, force=TRUE,outdir = "results/arrayQualityMetrics report for eset_rma")
+```
+Observando la figura inferior que aparece en el archivo _index.html_ de los datos ***eset_rma***, podemos observar que los registros anteriores ya no presentan las 3 cruces. Continuamos con todos ellos. 
+
+```{r QCRawDataResnorm, fig.cap="Aspect of the summary table, in the index.html file, produced by the arrayQualityMetrics package on the RMA raw data", echo=FALSE}
+knitr::include_graphics("Figura_calidad_rma.jpg")
+```
+
+
+En el gráfico de componentes principales se puede ver que sigue habiendo muchos arrays mezclados. También se puede observar que hay 11 arrays del grupo IS que están perfectamente separados del resto de arrays. 
+
+```{r fig:PCANorm, message=FALSE, fig.cap="Visualization of first two principal components for normalized data"}
+plotPCA3(exprs(eset_rma), labels = my.targets@data$Name, factor = my.targets@data$Group, 
+         title="Raw data", scale = FALSE, size = 3,  colores = c("red", "blue", "green"))
+```
+
+
+```{r BoxplotNorm, message=FALSE, fig.cap="Distribution of  intensities for normalized data"}
+boxplot(eset_rma, cex.axis=0.5, las=2,  which="all", 
+          col = c(rep("green", 20),rep("blue", 20), rep("red", 15) ),
+         main="Boxplot for arrays intensity: Normalized Data")
+
+
+hist(eset_rma, main="Signal distribution normalized data", col = c(rep("green", 20),rep("blue", 20), rep("red", 15)),    lty=1:nrow(pData(rawData)))
+legend(x="topright", legend=  pData(rawData)$Name ,col = c(rep("green", 20),rep("blue", 20), rep("red", 15)),
+     lty=1:nrow(pData(rawData)), cex=0.45)
+
+```
+
+En el gráfico de cajas y bigotes, todos los arrays presentan una distribución similar.
+
+Podemos concluir que el proceso de normalizado se ha ejecutado con éxito. 
+
+
+## Identificación de genes diferencialmente expresados
+
+Se realiza una representación gráfica de la desviación típica de cada uno de los genes para observar aquellos genes que presentan una desviación mayor y que son los que se espera que se expresen de forma diferencial. 
+
+```{r SDplot, fig.cap="Values of standard deviations allong all samples for all genes ordered from smallest to biggest"}
+sds <- apply (exprs(eset_rma), 1, sd)
+sdsO<- sort(sds)
+plot(1:length(sdsO), sdsO, main="Distribution of variability for all genes",
+     sub="Vertical lines represent 90% and 95% percentiles",
+     xlab="Gene index (from least to most variable)", ylab="Standard deviation")
+abline(v=length(sds)*c(0.9,0.95))
+
+```
+
+Los siguientes genes son los que presentan mayor variabilidad:
+
+* AFFX-CreX-5_at
+* AFFX-CreX-3_at
+* 41214_at
+* 34499_at
+* 38405_at
+
+## Filtraje
+
+El filtraje no específico permite eliminar los genes que varían poco entre condiciones o que deseamos quitar por otras razones como por ejemplo que no disponemos de anotación para ellos. La función nsFilter permite eliminar los genes que, o bien varían poco, o bien no se dispone de anotación para ellos. Si al filtrar deseamos usar las anotaciones, o la falta de ellas, como criterio de filtraje debemos disponer del correspondiente paquete de anotaciones.
+Si al crear el objeto expressionSet no se le ha asignado una anotación debe hacerse antes de filtrar pera evitar un error, que se producirá en el caso que intentemos filtrar con el parámetro require.entrez puesto en TRUE.
+
+Aplicaremos un filtraje “estándar” que retenga el 50% de los genes con mayor variabilidad de entre aquellos que estan correctamente anotados, es decir eliminando aquellos que no tienen identificador en la base de datos Entrez.
+
+El resultado del filtraje es una lista con varios objetos, que informan de lo que se ha descartado y un objeto expressionSet que, en lugar de 12626 “features” tiene 4380 que son los que estan anotados y tienen mayor variabilidad. La selección de genes se llevará a cabo sobre esta lista.
+
+```{r Filtering1, results='hide', message=FALSE}
+library(genefilter)
+show(annotation(eset_rma))
+          
+##### Si funciona
+BiocManager::install("hgu95av2.db")
+library("hgu95av2.db")
+library("Biobase")
+annotation(eset_rma) <- "hgu95av2.db"
+
+filtered<- nsFilter(eset_rma, require.entrez = TRUE, remove.dupEntrez = TRUE,
+                     var.filter=TRUE, var.func= IQR, var.cutoff=0.50, 
+                    filterByQuantile=TRUE, feature.exclude = "^AFFX")
+
+```
+
+```{r FilterResults1, results='hide', echo=FALSE}
+names(filtered)
+class(filtered$eset)
+(filtered$eset)
+```
+
+```{r FilterResults2}
+print(filtered$filter.log)
+eset_filtered <-filtered$eset
+dim(eset_filtered)
+save(eset_rma, eset_filtered, file = paste0("results/", "datos.normalizados.Rda"))
+```
+
+
+## Selección de genes diferencialmente expresados
+
+La selección de genes diferencialmente expresados (GDE) puede basarse en distintas aproximaciones, desde la t de Student al programa SAM pasando por multitud de variantes. En este ejemplo, dado que se realizaran tres comparaciones que luego deseamos comparar entre ellas, se aplicará la aproximación presentada por Smyth (2004) basado en la utilización del modelo lineal general combinada con un método para obtener una estimación mejorada de la varianza.
+
+## Matriz de diseño
+
+El primer paso para el análisis basado en modelos lineales es crear la matriz de diseño. Básicamente, la matriz de diseño es una tabla que describe la asignación de cada muestra a un grupo. Tiene tantas filas como muestras y tantas columnas como grupos (si solo se considera un factor). Cada fila contiene un uno en la columna del grupo al que pertenece la muestra y un cero en las restantes. 
+Se define la matriz de diseño para los 3 grupos: 
+
+```{r DesignMatrix, message=FALSE}
+library(limma)
+designMat<- model.matrix(~0+Group, pData(eset_filtered))
+colnames(designMat) <- c("DB_stimulate", "IR_stimulate", "IS_stimulate")
+print(designMat)
+```
+
+La matriz de contrastes se utiliza para describir las comparaciones entre grupos. Consta de tantas columnas como comparaciones y tantas filas como grupos (es decir como columnas de la matriz de diseño). Una comparación entre grupos –llamada “contraste”– se representa con un “1” y un “-1” en las filas de los grupos a comparar y ceros en las restantes. Si varios grupos intervinieran en la comparación se tendría tantos coeficientes como grupos con la única restricción de que su suma sería cero.
+
+Se define la matriz de contrastes para realizar las 3 comparaciones posibles: 
+
+```{r setContrasts}
+cont.matrix <- makeContrasts (DBvsIR = DB_stimulate-IR_stimulate,
+                              DBvsIS = DB_stimulate-IS_stimulate,
+                              IRvsIS = IR_stimulate-IS_stimulate,
+                              levels=designMat)
+print(cont.matrix)
+```
+
+
+## Estimación del modelo y selección de genes
+
+Una vez definida la matriz de diseño y los contrastes podemos pasar a estimar el modelo, estimar los contrastes y realizar las pruebas de significación que nos indiquen, para cada gen y cada comparación, si puede considerarse diferencialmente expresado.
+El método implementado en limma amplía el análisis tradicional utilizando modelos de Bayes empíricos para combinar la información de toda la matriz de datos y de cada gen individual y obtener estimaciones de error mejoradas.
+
+El análisis proporciona los estadísticos de test habituales como Fold-change t-moderados o p-valores ajustados que se utilizan para ordenar los genes de más a menos diferencialmente expresados. 
+
+A fin de controlar el porcentaje de falsos positivos que puedan resultar del alto numero de contrastes realizados simultáneamente los p–valores se ajustan de forma que tengamos control sobre la tasa de falsos positivos utilizando el método de Benjamini y Hochberg.
+
+```{r linearmodelfit}
+library(limma)
+fit<-lmFit(eset_filtered, designMat)
+fit.main<-contrasts.fit(fit, cont.matrix)
+fit.main<-eBayes(fit.main)
+class(fit.main)
+```
+
+Utilizamos la función $topTable$ del paquete $limma$ para obtener los resultados de las comparaciones que hemos definido en la matriz de contrastes. Los datos vienen ordenados de menor p-valor a mayor, por lo que los primeros registros serán los que muestren mayor significación estadística. 
+
+Para cada comparación se muestran los siguientes estadísticos: 
+
+-  `logFC`: Diferencia de medias entre grupos.  
+-  `AveExpr`: Expresión media de todos los genes de la comparación. 
+-  `t` : Estadístico t.
+-  `P.Value`: Test p-value.  
+-  `adj.P.Val`: p-valor ajustado según Benjamini1995      
+-  `B`: B-statistic: Logaritmo del ratio de los genes expresados diferencialmente vs no diferenciados.
+
+
+Se muestran la lista de 20 genes con un p-valor ajustado menor
+
+```{r topTabs1}
+topTab_DBvsIR <- topTable (fit.main, number=nrow(fit.main), coef="DBvsIR", adjust="fdr") 
+head(topTab_DBvsIR,20)
+#####
+topTab_DBvsIS <- topTable (fit.main, number=nrow(fit.main), coef="DBvsIS", adjust="fdr") 
+head(topTab_DBvsIS,20)
+#####
+topTab_IRvsIS <- topTable (fit.main, number=nrow(fit.main), coef="IRvsIS", adjust="fdr")
+head(topTab_IRvsIS,20)
+```
+
+Un volcano-plot es una figuras que permite visualizar si hay muchos o pocos genes con un gran fold-change y significativamente expresados o si este número es bajo. Estos gráficos representa en abscisas los cambios de expresión en escala logarítmica y en ordenadas el “menos logaritmo” del p-valor o alternativamente el estadístico B (“log-odds”). Se muestran los nombres de los 5 genes con menor p-valor ajustado.  
+
+```{r volcanoplot DBvsIR}
+## ----class.source = 'fold-hide', volcano ----------------
+library(annotate)
+annotation(eset_rma)
+probeNames <- rownames(fit.main)
+Symbols <- getSYMBOL(probeNames, annotation(eset_rma))
+myNames <- paste(probeNames, Symbols, sep = ".")
+head(myNames)
+volcanoplot(fit.main, coef = "DBvsIR", highlight = 5, names = Symbols,
+            main=paste("Differentially expressed genes", colnames(cont.matrix)[1], sep="\n"))
+abline(v=c(-1,1))
+```
+
+En el gráfico superior, se puede observar que el gen RAB11B presenta una regulación negativa, con el menor p-valor, mientrás que los otros 4 genes representados(Tasor, FAP, NEAT1 y LUM), presentan una regulación positiva.
+
+```{r volcanoplot DBvsIS}
+volcanoplot(fit.main, coef = "DBvsIS", highlight = 5, names = Symbols,
+            main=paste("Differentially expressed genes", colnames(cont.matrix)[2], sep="\n"))
+abline(v=c(-1,1))
+```
+
+En el gráfico superior, se puede observar que los genes NEAT1 y PRKAR2A presentan una regulación positiva, mientrás que los genes PCBD1, PCGF1 y ATP1A3, presentan una regulación negativa.
+
+
+```{r volcanoplot ISvsIS}
+volcanoplot(fit.main, coef = "IRvsIS", highlight = 5, names = Symbols,
+            main=paste("Differentially expressed genes", colnames(cont.matrix)[3], sep="\n"))
+abline(v=c(-1,1))
+```
+
+En el gráfico superior, se puede observar que los genes SAFB y NFIC presentan una regulación positiva, mientrás que los genes TNFAIP1, EXOC6B y RAB31, presentan una regulación negativa.
+
+## Anotación de los resultados
+
+```{r GeneAnnotation, message=FALSE, warning=FALSE}
+library(hgu95av2.db)
+
+annotatedTopTable <- function(topTab, anotPackage)
+{
+  topTab <- cbind(PROBEID=rownames(topTab), topTab)
+  myProbes <- rownames(topTab)
+  thePackage <- eval(parse(text = anotPackage))
+  geneAnots <- select(thePackage, myProbes, c("SYMBOL", "ENTREZID", "GENENAME"))
+  annotatedTopTab<- merge(x=geneAnots, y=topTab, by.x="PROBEID", by.y="PROBEID")
+return(annotatedTopTab)
+}
+
+```
+
+
+```{r annotateTopTables}
+topAnnotated_DBvsIR<- annotatedTopTable(topTab_DBvsIR,anotPackage="hgu95av2.db")
+topAnnotated_DBvsIS<- annotatedTopTable(topTab_DBvsIS,anotPackage="hgu95av2.db")
+topAnnotated_IRvsIS<- annotatedTopTable(topTab_IRvsIS,anotPackage="hgu95av2.db")
+
+##### Los ordenamos
+topAnnotated_DBvsIR<-topAnnotated_DBvsIR[order(topAnnotated_DBvsIR$adj.P.Val, topAnnotated_DBvsIR$P.Value),]
+topAnnotated_DBvsIS<-topAnnotated_DBvsIS[order(topAnnotated_DBvsIS$adj.P.Val, topAnnotated_DBvsIS$P.Value),]
+topAnnotated_IRvsIS<-topAnnotated_IRvsIS[order(topAnnotated_IRvsIS$adj.P.Val, topAnnotated_IRvsIS$P.Value),]
+
+write.csv(topAnnotated_DBvsIR, file="./results/topAnnotated_DBvsIR.csv")
+write.csv(topAnnotated_DBvsIS, file="./results/topAnnotated_DBvsIS.csv")
+write.csv(topAnnotated_IRvsIS, file="./results/topAnnotated_IRvsIS.csv")
+
+```
+
+Se muestran los 5 primeros registros de las comparaciones entre DB vs IR: 
+
+```{r annotatedTop, echo=FALSE}
+short1<- head(topAnnotated_DBvsIR[1:5,1:4])
+show(short1)
+```
+
+Se muestran los 5 primeros registros de las comparaciones entre DB vs IS: 
+
+```{r annotatedTop1, echo=FALSE}
+short2<- head(topAnnotated_DBvsIS[1:5,1:4])
+show(short2)
+```
+Se muestran los 5 primeros registros de las comparaciones entre IR vs IS: 
+
+```{r annotatedTop2, echo=FALSE}
+short3<- head(topAnnotated_IRvsIS[1:5,1:4])
+show(short3)
+```
+
+## Comparaciónes múltiples
+
+Cuando se realizan varias comparaciones a la vez puede resultar importante ver que genes cambian simultáneamente en más de una comparación.
+
+Si el número de comparaciones es alto también puede ser necesario realizar un ajuste de p-valores entre las comparaciones, distinto del realizado entre genes.
+
+La función decidetests permite realizar ambas cosas. En este ejemplo no se ajustaran los p-valores entre comparaciones. Tan solo se seleccionaran los genes que cambian en una o más condiciones.
+
+EL resultado del análisis es una tabla res que para cada gen y cada comparación contiene un 1 (si el gen esta sobre-expresado o "up" en esta condicion), un 0 (si no hay cambio significativo) o un -1 (si está "down" regulado).
+
+Para resumir dicho análisis podemos contar qué filas tienen como mínimo una celda distinta de cero:
+
+
+```{r decideTests.1}
+library(limma)
+res<-decideTests(fit.main, method="separate", adjust.method="fdr", p.value=0.05, lfc=0)
+# Resumen
+sum.res.rows<-apply(abs(res),1,sum)
+res.selected<-res[sum.res.rows!=0,] 
+print(summary(res))
+```
+
+* Se puede observar que hay 294 genes expresado de forma diferencial entre DB y IR: 
+    + Hay 139 genes poco expresados entre DB y IR
+    + Hay 155 genes sobre expresados entre DB y IR
+* Se puede observar que hay 1843 genes expresado de forma diferencial entre DB y IS: 
+    + Hay 731 genes poco expresados entre DB y IS
+    + Hay 1112 genes sobre expresados entre DB y IS
+* Se puede observar que hay 863 genes expresado de forma diferencial entre IR y IS: 
+    + Hay 511 genes poco expresados entre IR y IS
+    + Hay 352 genes sobre expresados entre IR y IS
+
+
+Se realiza un diagrama de Venn para observar cuantos genes se expresan de forma diferencial entre las tres comparaciones sin diferenciar entre genes **up** o **down** regulados. 
+
+```{r vennDiagram, fig.cap="Venn diagram showing the genes in common between the three comparisons performed"}
+vennDiagram (res.selected[,1:3], cex=0.9)
+title("Genes in common between the three comparisons\n Genes selected with FDR < 0.05 and logFC > 0")
+```
+
+## Resultados Análisis de datos ómicos
+
+Como es lógico pensar, la diferencia más clara está entre los grupos DB y IS, donde se puede apreciar que hay 1106 genes expresados de forma significativa unicamente entre estos dos grupos. 
+
+Resulta curioso, que el grupo IR esté más próximo al grupo DB que al grupo IS. 
+
+Este resultado, sin embargo, tiene que quedar, en el mejor de los casos en entredicho puesto que, como se ha
+visto, las diferencias entre estos grupos coinciden con las que podríamos atribuir a los efectos batch.
+
+## Visualización de los perfiles de expresión
+
+Tras seleccionar los genes diferencialmente expresados podemos visualizar las expresiones de cada gen agrupándolas para destacar los genes que se encuentran up o down regulados simultáneamente constituyendo perfiles de expresión.
+
+Hay distintas formas de visualización pero aquí tan sólo se presenta el uso de mapas de color o “Heatmaps.”
+
+En primer lugar seleccionamos los genes a visualizar: Se toman todos aquellos que han resultado diferencialmente expresados en alguna de las tres comparaciones. Para representar el Heatmap tan sólo necesitamos la matriz de datos resultante.
+
+```{r heatmapClustering, fig.cap="Heatmap for expression data grouping genes (rows) and samples (columns) by their similarity"}
+#####################################################################################################
+# Escribimos los que tiene los 20 más significativos. Este es el fichero con el que se trabaja en ML
+# Se toman 22 genes en la segunda comparación ya que hay genes repetidos respecto de DBvsIR y 
+# 23 respecto de IRvsIS. 
+# De esta forma, se toman 20 genes en cada una de las comparaciones
+#####################################################################################################
+probeNames_20<-c(topAnnotated_DBvsIR$PROBEID[1:20], topAnnotated_DBvsIS$PROBEID[1:22], topAnnotated_IRvsIS$PROBEID[1:23])
+datos <- data.frame(Nombres=probeNames_20)
+datos<-datos[!duplicated(datos), ]
+datos_sindupl<-(data.frame(Nombres=datos))
+exprs20cluster <- exprs(eset_filtered)[datos_sindupl$Nombres, ]
+datos_ML<-t(exprs20cluster)  # Este es el fichero que vamos a utilizar en la parte de Machine Learning
+dim(datos_ML)
+
+write.csv(exprs20cluster, file = file.path("./results/data4Heatmap20.csv"))
+write.csv(datos_ML, file = file.path("./results/datos_ML.csv"))
+# Los eliminados son 36315_i_at, 38207_at y 38751_i_at
+
+##### Seguimos con el resto del proceso. 
+probeNames <- rownames(res)
+probeNames.selected <- probeNames[sum.res.rows != 0]
+exprs2cluster <- exprs(eset_filtered)[probeNames.selected, ]
+colnames(exprs2cluster) <- pData(rawData)$Name
+
+##### Creamos un fichero con los 4 genes que se expresan de forma diferencial entre las 3 comparaciones
+probeNames.selected_4genes <- probeNames[sum.res.rows == 3]
+exprs2cluster_4genes <- exprs(eset_filtered)[probeNames.selected_4genes, ]
+colnames(exprs2cluster_4genes) <- pData(rawData)$Name
+
+#####
+color.map <- function(grupo) {
+if (grupo == "IS_stimulate") {
+c <- "green"
+} else {
+if (grupo == "IR_stimulate") {
+c <- "blue"
+} else {
+c <- "red"
+}
+}
+return(c)
+}
+
+##### Hacemos el heatmap
+grupColors <- unlist(lapply(pData(eset_filtered)$Group, color.map))
+dim(exprs2cluster)
+heatmap(exprs2cluster, col = rainbow(100), ColSideColors = grupColors, cexCol = 0.9)
+##### Escribimos el fichero con los genes expresados de forma diferencial.
+write.csv(exprs2cluster, file = file.path("./results/data4Heatmap2.csv"))
+write.csv(t(exprs2cluster), file = file.path("./results/data4Heatmap2t.csv"))
+```
+
+En el Heatmap se puede observar como los grupos de DB (rojo) e IR (azul) están mezclado y que en la parte de la izquierda, aparece un grupo homogéneo de registros de IS (verdes). En la parte izquierda, aparecen un grupo de registros IR y un registro DB que parecen que son los registros que aparecían más alejados en el gráfico de Análisis de Componentes Principales (IR11:IR17 y DB4)
+
+```{r heatmapClustering60, fig.cap="Heatmap for expression data grouping genes (rows) and samples (columns) by their similarity with the sixty genes which are expressed more differentially between the three comparations"}
+#####Hacemos el heatmap con los 4 genes que se expresan de forma diferencial entre las 3 comparaciones
+heatmap(exprs20cluster, col = rainbow(100), ColSideColors = grupColors, cexCol = 0.9)
+```
+En este segundo Heatmap se puede observar como los grupos de DB (rojo) e IR (azul) están mezclado y que en la parte de la izquierda, aparece un grupo homogéneo de registros de IS (verdes). En este caso, parece que están más diferenciados los 3 grupos. A la izquierda los IS, en el centro los IR y a la derecha los DB. 
+
+```{r heatmapClustering4, fig.cap="Heatmap for expression data grouping genes (rows) and samples (columns) by their similarity with the four genes which are expressed differentially between the three comparations"}
+#####Hacemos el heatmap con los 4 genes que se expresan de forma diferencial entre las 3 comparaciones
+heatmap(exprs2cluster_4genes, col = rainbow(100), ColSideColors = grupColors, cexCol = 0.9)
+write.csv(exprs2cluster_4genes, file = file.path("./results/data4Heatmap_4genes.csv"))
+datos_ML_4genes<-t(exprs2cluster_4genes)  # Este es el fichero que vamos a utilizar en la parte de Machine Learning de 4 genes
+write.csv(t(exprs2cluster_4genes), file = file.path("./results/datos_ML_4genes.csv"))
+```
+
+En este tercer Heatmap formada por 4 genes (hay que recordar que estos 4 genes son los que aparecen expresados de forma diferencial entre las 3 comparaciones) la discrinación no es tan clara, a la izquierda está el grupo IS (verde), en el centro el grupo DB (rojo) y a la derecha el grupo IR (azul), aunque hay registros de la categoría IS mezclados con las otras dos categorías.  
+
+Los 4 genes que se expresan de forma diferencial en las 3 comparaciones son: 
+* 35670_at
+* 34352_at
+* 41064_at
+* 36237_at
+
+
+## Análisis de significación biológica (“Gene Enrichment Analysis”)
+
+Una vez obtenidas las listas de genes diferencialmente expresados pueden llevarse a cabo todo tipo de análisis sobre ellas, generalmente encaminados a facilitar la interpretación de los resultados. Entre estas exploraciones –que podemos llamar genéricamente“post-procesado de las listas” se encuentra la anotación de las listas de genes en diversas bases de datos. 
+
+EL análisis de significación biológica de las listas mediante análisis de enriquecimiento o mediante “gene set analysis” para detectar si las listas se encuentran enriquecidas en genes asociados a funciones o procesos biológicos determinados.
+
+Puesto que el número de genes que podemos considerar diferencialmente expresados es suficientemente alto se realizará un análisis de sobre-representación o Gene Enrichment Analysis.
+
+Se va a utilizar el análisis básico de enriquecimiento tal como se describe en los trabajos de Falcon y Gentleman
+(Falcon:2007) implementados en el paquete GOstats de Bioconductor. 
+
+El análisis se realiza sobre dos bases de datos de anotaciones, la "Gene Ontology’ ’ o la “Kyoto Encyclopedia
+of Genes and Genomes’. Los análisis de este tipo necesitan un número mínimo de genes para resultar fiables por lo que se incluirán en todos los genes con p–valores ajustados inferiores a 0.05 (sin filtrar por mínimo “fold–change’ ’).
+
+```{r GOstats}
+## ----class.source = 'fold-hide', ORA, eval=TRUE ---------
+BiocManager::install("GOstats")
+library(GOstats)
+BiocManager::install("annotate")
+library(annotate)
+BiocManager::install("hgu95av2.db")
+library(hgu95av2.db)
+########################################
+# Seleccionamos la 'topTable' IR vs IS
+########################################
+topTab <- topTab_IRvsIS
+# Definimos el universo de genes: todos los que se han incluido en el análisis el 
+# programa trabaja con identificadores 'entrez' y no admite duplicados
+entrezUniverse<-unique(getEG(rownames(topTab), "hgu95av2.db"))
+#####
+whichGenes <- topTab["adj.P.Val"] < 0.05
+geneIds <- unique(getEG(rownames(topTab)[whichGenes], "hgu95av2.db"))
+# Creamos los 'hiperparámetros' en que se basa el análisis
+##########################
+# Sobre-expresión IRvsIS  
+##########################
+GOparams_over<-new("GOHyperGParams", geneIds = geneIds, universeGeneIds = entrezUniverse,
+           annotation="org.Hs.eg.db", ontology = "BP", pvalueCutoff = 0.05, conditional = FALSE,
+           testDirection = "over") # under
+# Ejecutamos los análisis
+GOhyper<-hyperGTest(GOparams_over)
+
+#Creamos un informe html con los resultados
+comparison <- "IRvsIS"
+GOfilename <- paste0("./results/","GO_overResults.", comparison, ".html")
+htmlReport(GOhyper, file = GOfilename, summary.args = list(htmlLinks = TRUE))
+##########################
+# Baja-expresión IRvsIS  
+##########################
+GOparams_under<-new("GOHyperGParams", geneIds = geneIds, universeGeneIds = entrezUniverse,
+           annotation="org.Hs.eg.db", ontology = "BP", pvalueCutoff = 0.05, conditional = FALSE,
+           testDirection = "under") # under
+# Ejecutamos los análisis
+GOhyper<-hyperGTest(GOparams_under)
+
+#Creamos un informe html con los resultados
+comparison <- "IRvsIS"
+GOfilename <- paste0("./results/","GO_underResults.", comparison, ".html")
+htmlReport(GOhyper, file = GOfilename, summary.args = list(htmlLinks = TRUE))
+
+########################################
+# Seleccionamos la 'topTable' DB vs IR
+########################################
+topTab <- topTab_DBvsIR
+# Definimos el universo de genes: todos los que se han incluido en el análisis el 
+# programa trabaja con identificadores 'entrez' y no admite duplicados
+entrezUniverse<-unique(getEG(rownames(topTab), "hgu95av2.db"))
+#####
+whichGenes <- topTab["adj.P.Val"] < 0.05
+geneIds <- unique(getEG(rownames(topTab)[whichGenes], "hgu95av2.db"))
+# Creamos los 'hiperparámetros' en que se basa el análisis
+#####################
+# Sobre-expresión DBvsIR  
+#####################
+GOparams_over<-new("GOHyperGParams", geneIds = geneIds, universeGeneIds = entrezUniverse,
+           annotation="org.Hs.eg.db", ontology = "BP", pvalueCutoff = 0.05, conditional = FALSE,
+           testDirection = "over")
+# Ejecutamos los análisis
+GOhyper<-hyperGTest(GOparams_over)
+
+#Creamos un informe html con los resultados
+comparison <- "DBvsIR"
+GOfilename <- paste0("./results/","GO_overResults.", comparison, ".html")
+htmlReport(GOhyper, file = GOfilename, summary.args = list(htmlLinks = TRUE))
+#####################
+# Baja- expresión DBvsIR  
+#####################
+GOparams_under<-new("GOHyperGParams", geneIds = geneIds, universeGeneIds = entrezUniverse,
+           annotation="org.Hs.eg.db", ontology = "BP", pvalueCutoff = 0.05, conditional = FALSE,
+           testDirection = "under") 
+
+# Ejecutamos los análisis
+GOhyper<-hyperGTest(GOparams_under)
+
+#Creamos un informe html con los resultados
+comparison <- "DBvsIR"
+GOfilename <- paste0("./results/","GO_underResults.", comparison, ".html")
+htmlReport(GOhyper, file = GOfilename, summary.args = list(htmlLinks = TRUE))
+
+########################################
+# Seleccionamos la 'topTable' DB vs IS
+########################################
+topTab <- topTab_DBvsIS
+# Definimos el universo de genes: todos los que se han incluido en el análisis el 
+# programa trabaja con identificadores 'entrez' y no admite duplicados
+entrezUniverse<-unique(getEG(rownames(topTab), "hgu95av2.db"))
+#####
+whichGenes <- topTab["adj.P.Val"] < 0.05
+geneIds <- unique(getEG(rownames(topTab)[whichGenes], "hgu95av2.db"))
+# Creamos los 'hiperparámetros' en que se basa el análisis
+##########################
+# Sobre-expresión DBvsIS  
+##########################
+GOparams_over<-new("GOHyperGParams", geneIds = geneIds, universeGeneIds = entrezUniverse,
+           annotation="org.Hs.eg.db", ontology = "BP", pvalueCutoff = 0.05, conditional = FALSE,
+           testDirection = "over")  
+
+# Ejecutamos los análisis
+GOhyper<-hyperGTest(GOparams_over)
+
+#Creamos un informe html con los resultados
+comparison <- "DBvsIS"
+GOfilename <- paste0("./results/","GO_overResults.", comparison, ".html")
+htmlReport(GOhyper, file = GOfilename, summary.args = list(htmlLinks = TRUE))
+
+##########################
+# Baja- expresión DBvsIS  
+##########################
+GOparams_under<-new("GOHyperGParams", geneIds = geneIds, universeGeneIds = entrezUniverse,
+           annotation="org.Hs.eg.db", ontology = "BP", pvalueCutoff = 0.05, conditional = FALSE,
+           testDirection = "under") 
+
+# Ejecutamos los análisis
+GOhyper<-hyperGTest(GOparams_under)
+
+#Creamos un informe html con los resultados
+comparison <- "DBvsIS"
+GOfilename <- paste0("./results/","GO_underResults.", comparison, ".html")
+htmlReport(GOhyper, file = GOfilename, summary.args = list(htmlLinks = TRUE))
+
+```
+
+
+
+```{r selectGenes}
+listOfTables <- list(DBvsIR = topTab_DBvsIR,
+                     DBvsIS  = topTab_DBvsIS,
+                     IRvsIS  = topTab_IRvsIS)
+listOfSelected <- list()
+for (i in 1:length(listOfTables)){
+  # select the toptable
+  topTab <- listOfTables[[i]]
+  # select the genes to be included in the analysis
+  whichGenes<-topTab["adj.P.Val"]<0.05
+  selectedIDs <- rownames(topTab)[whichGenes]
+  # convert the ID to Entrez
+  EntrezIDs<- select(hgu95av2.db, selectedIDs, c("ENTREZID"))
+  EntrezIDs <- EntrezIDs$ENTREZID
+  listOfSelected[[i]] <- EntrezIDs
+  names(listOfSelected)[i] <- names(listOfTables)[i]
+}
+sapply(listOfSelected, length)
+```
+
+```{r mapped_genes}
+mapped_genes2GO <- mappedkeys(hgu95av2GO)
+mapped_genes2KEGG <- mappedkeys(hgu95av2PATH)
+mapped_genes <- union(mapped_genes2GO , mapped_genes2KEGG)
+```
+
+```{r BiologicalSig DBvsIR, warning=FALSE}
+BiocManager::install("DO.db")
+library(DO.db)
+BiocManager::install("GO.db")
+library(GO.db)
+if(require("tweenr")==FALSE){install.packages("tweenr")}
+library(tweenr)
+if(require("ggnewscale")==FALSE){install.packages("ggnewscale")}
+library(ggnewscale)
+BiocManager::install("ReactomePA")
+library(ReactomePA)
+
+listOfData <- listOfSelected[1]
+comparisonsNames <- names(listOfData)
+universe <- mapped_genes
+
+  genesIn <- listOfData[[1]]
+  comparison <- comparisonsNames
+  enrich.result_0 <- enrichPathway(gene = genesIn,
+                                 pvalueCutoff = 1,
+                                 readable = FALSE,
+                                 pAdjustMethod = "BH",
+                                 organism = "human")
+  
+```
+
+No se encuentran relaciones para la comparación entre DB vs IR, puede ser debido a los pocos genes que se han obtenido que se expresan de forma diferencial (294). 
+
+
+```{r BiologicalSig DBvsIS, warning=FALSE}
+listOfData <- listOfSelected[2]
+comparisonsNames <- names(listOfData)
+universe <- mapped_genes
+
+  genesIn <- listOfData[[1]]
+  comparison <- comparisonsNames
+  enrich.result_1 <- enrichPathway(gene = genesIn,
+                                 pvalueCutoff = 0.05,
+                                 readable = TRUE,
+                                 pAdjustMethod = "BH",
+                                 organism = "human")
+                              #  universe = universe)
+    cat("\nComparison: ", comparison,"\n")
+  print(head(enrich.result_1))
+  
+    write.csv(as.data.frame(enrich.result_1),
+            file =paste0("./results/","ReactomePA.Results.",comparison,".csv"), 
+             row.names = FALSE)
+  
+  pdf(file=paste0("./results/","ReactomePABarplot.",comparison,".pdf"))
+  print(barplot(enrich.result_1, showCategory = 15, font.size = 4, 
+            title = paste0("Reactome Pathway Analysis for ", comparison,". Barplot")))
+    dev.off()
+  
+  pdf(file = paste0("./results/","ReactomePAcnetplot.",comparison,".pdf"))
+    print(cnetplot(enrich.result_1, categorySize = "geneNum", schowCategory = 15, 
+         vertex.label.cex = 0.75))
+  dev.off()
+
+
+```
+
+
+```{r network1, fig.cap="Network obtained from the Reactome enrichment analysis on the list obtained from the comparison between DB and IS"}
+  cnetplot(enrich.result_1, categorySize = "geneNum", schowCategory = 15, vertex.label.cex = 0.75)
+```
+
+```{r BiologicalSig IRvsIS , warning=FALSE}
+listOfData <- listOfSelected[3]
+comparisonsNames <- names(listOfData)
+universe <- mapped_genes
+
+  genesIn <- listOfData[[1]]
+  comparison <- comparisonsNames
+  enrich.result_2 <- enrichPathway(gene = genesIn,
+                                 pvalueCutoff = 0.05,
+                                 readable = TRUE,
+                                 pAdjustMethod = "BH",
+                                 organism = "human")
+                             #    universe = universe)
+  
+  cat("\nComparison: ", comparison,"\n")
+  print(head(enrich.result_2))
+  
+ write.csv(as.data.frame(enrich.result_2),
+            file =paste0("./results/","ReactomePA.Results.",comparison,".csv"), 
+             row.names = FALSE)
+  
+  pdf(file=paste0("./results/","ReactomePABarplot.",comparison,".pdf"))
+  print(barplot(enrich.result_2, showCategory = 15, font.size = 4, 
+            title = paste0("Reactome Pathway Analysis for ", comparison,". Barplot")))
+    dev.off()
+  
+  pdf(file = paste0("./results/","ReactomePAcnetplot.",comparison,".pdf"))
+    print(cnetplot(enrich.result_2, categorySize = "geneNum", schowCategory = 15, 
+         vertex.label.cex = 0.75))
+  dev.off()
+ 
+
+########
+
+```
+
+```{r network2, fig.cap="Network obtained from the Reactome enrichment analysis on the list obtained from the comparison between IR and IS"}
+  cnetplot(enrich.result_2, categorySize = "geneNum", schowCategory = 15, vertex.label.cex = 0.75)
+
+```
+
+# Parte 2. Machine Learning
+
+
+```{r load_libraries, include=FALSE}
+if(require("knitr")==FALSE){install.packages("knitr",dependencies=TRUE)}
+library(knitr)
+if(require("kableExtra")==FALSE){install.packages("kableExtra")}
+library(kableExtra)
+if(require("class")==FALSE){install.packages("class")}
+library(class)
+if(require("neuralnet")==FALSE){install.packages("neuralnet",dependencies=TRUE)}
+library(neuralnet)
+#if(require("NeuralNetTools")==FALSE){install.packages("NeuralNetTools",dependencies=TRUE)}
+#library(NeuralNetTools)
+if(require("kernlab")==FALSE){install.packages("kernlab",dependencies=TRUE)}
+library(kernlab)
+if(require("randomForest")==FALSE){install.packages("randomForest",dependencies=TRUE)}
+library(randomForest)
+if(require("caret")==FALSE){install.packages("caret")}
+library(caret)
+if(require("ggplot2")==FALSE){install.packages("ggplot2")}
+library(ggplot2)
+if(require("keras")==FALSE){install.packages("keras")}
+library(keras)
+
+```
+
+
+## Introduccion Machine Learning
+
+Esta ejecución corresponde a la segunda parte del TFM, es decir, en la primera parte se realiza un ánalisis de datos omicos de los genes de tres tipos de pacientes: Insulina-sensibles (IS), insulina-resistentes (IR) y diabéticos (DB). Una vez obtenidos los genes que se expresaban de forma más significativa, se pretende elaborar diversos modelos predictivos para intentar clasificar a los pacientes en las 3 categorias previamente comentadas. En una segunda parte, y dado que en el análisis de datos ómicos se ha podido comprobar la proximidad entre los pacientes IR y DB, se han unificado estas dos categorias en la matriz de confusión 3x3, creando una matriz de confusión 2x2 (IS vs IR-DB) para posteriormente calcular la sensibilidad, especifidad, valor predictivo positivo y negativo. 
+Las técnicas de Machine Learning utilizadas en este análisis son: 
+
+* Multilayer perceptron (MLP) 
+* k-nearest neighbors (KNN)
+* Artificial neural network (ANN)
+* Artificial neural network (ANN) junto con análisis de componentes principales (ACP)
+* Support Vector Machine (SVM)
+* Random Forest (RF)
+
+## Datos de entrada
+
+Este conjunto de datos corresponde al obtenido en el análisis de datos ómicos al seleccionar los 20 genes con el p-valor ajustado más pequeño de realizar las comparaciones dos a dos entre los tres tipos de pacientes que tenemos: insulina-sensibles (IS), insulina-resistentes (IR) y diabéticos (DB).
+El objetivo de este análisis es comprobar si es posible predecir las 3 categorías descritas anteriormente mediante los genes que se han expresado de forma diferencial en el análisis de datos ómicos. 
+
+Por otra parte, tras analizar los resultados de la parte de análisis de datos ómicos, se ha observado que hay 4 genes que aparecen expresados de forma diferencial entre las 3 comparaciones, pues se utilizan estos 4 genes como fichero de entrada para comprobar si estos 4 genes son suficientes para discriminar entre IS, IR y DB. 
+
+Leemos el fichero de entrada y factorizamos la variable objetivo. 
+
+```{r Step1 Collecting data,message=FALSE,warning=FALSE, echo =TRUE}
+datos<-as.data.frame(datos_ML)
+##### Factorizamos las variables objetivos con las 3 categorías
+datos$Grupo3<-c(rep(0,20),rep(1,20), rep(2,15))
+datos$Grupo3 <- factor(datos$Grupo3,levels = c(0,1,2),labels = c("IS", "IR", "DB"))
+
+```
+
+Construimos las variables one-hot de las variables objetivo: 
+
+```{r Step1 One hot data,message=FALSE,warning=FALSE, echo =TRUE}
+##### La variable de los 3 grupos
+datos$G3_IS_OH<-ifelse(datos$Grupo3 == "IS", 1, 0)
+datos$G3_IR_OH<-ifelse(datos$Grupo3 == "IR", 1, 0)
+datos$G3_DB_OH<-ifelse(datos$Grupo3 == "DB", 1, 0)
+##### Vemos si el ficher de entrada tiene datos perdidos
+leng<-length(complete.cases(datos))
+
+if(dim(datos)[1]==leng){cat("No hay datos perdidos")}else{cat("Sí hay datos perdidos")}
+
+```
+
+
+Observamos que el fichero no contiene datos perdidos, y que el conjunto de datos de entrada tiene $`r nrow(datos)`$ observaciones y $`r ncol(datos)`$ variables. 
+
+
+## Exploración y preparación de los datos
+
+Para una primera toma de contacto, mostramos los seis primeros registros de las 6 primeras variables y mostramos una breve estadística descriptiva de éstas: 
+
+```{r Step 2 head, echo =TRUE}
+print(head(datos[,c(1:6)]))
+
+# Resumen: 
+print(summary(datos[,1:6]))
+```
+
+Respecto de las variables numéricas, realizamos en primer lugar un diagrama de cajas y bigotes para observar la distribución de las variables numéricas. 
+
+```{r Step 2 cajas y bigotes, echo =TRUE}
+boxplot(datos[,1:60],cex.axis=0.6,ylab='Expresión',
+        main="Variables originales",las=2, col="orange")
+      
+```
+
+
+Hacemos un análisis de componentes principales para los datos originales y los centrados: 
+
+
+```{r pca plot,warning=FALSE}
+library(ggplot2)
+library(ggrepel)
+
+plotPCA3(t(datos[,c(1:60)]), labels = rownames(datos), factor = datos$Grupo3, 
+         title="Raw data", scale = FALSE, size = 3,   colores = c("green", "blue", "red"))
+
+```
+
+Se realiza un Análisis de Componentes Principales con los 60 genes, para posteriormente utilizar las variables del ACP como fichero de entrada con la técnica de las redes neuronales: 
+
+```{r Análisis de componentes principales}
+res_prcomp <- prcomp(datos[,c(1:60)], scale = TRUE, center = TRUE)
+plot(res_prcomp)
+abline(h=1, col="purple")
+print(summary(res_prcomp))
+# Gráfico de cajas y bigotes de las variables del ACP
+boxplot(res_prcomp$x[, 1:7],las=2, col="lightsalmon2", main="PCA data")
+datos_prcomp<-as.data.frame(res_prcomp$x[, 1:7])
+# Vemos que las 7 primeras componentes tienen "standard deviation" muy próxima a 1 o superior, luego nos quedamos con las 7 primera variables
+datos_acp<- as.data.frame(cbind(datos_prcomp, datos[,c(61:64)]))
+```
+
+Construimos el conjunto de datos de ***train*** y ***test*** con el 70% y 30% de los datos respectivamente. Para garantizar la validez del proceso, este paso se repite ***`r params$repetic`*** veces y se muestran los resultados de las ***`r params$repetic`*** ejecuciones: 
+
+
+## Ejecución de las distintas técnicas
+
+A pesar de que todos los valores numéricos ya han sido estandarizados en la parte de ***Análisis de datos ómicos*** mediante la función ***rma***, ahora también se van a normalizar mediante la siguiente fórmula: 
+
+$$X_{new} = \frac{X- min(X)}{max(X) - min(X)}$$
+
+
+```{r Step 2 Creación variables y ejecuciones, echo =TRUE,warnings=FALSE, message=FALSE}
+acc_MLP_3G<-acc_MLP_2G<-sen_MLP_2G<-esp_MLP_2G<-vpp_MLP_2G<-vpn_MLP_2G<-matrix(NA,params$repetic,1)
+acc_KNN_3G<-acc_KNN_2G<-sen_KNN_2G<-esp_KNN_2G<-vpp_KNN_2G<-vpn_KNN_2G<-matrix(NA,params$repetic,1)
+acc_ANN_3G<-acc_ANN_2G<-sen_ANN_2G<-esp_ANN_2G<-vpp_ANN_2G<-vpn_ANN_2G<-matrix(NA,params$repetic,1)
+acc_ANN_3G_ACP<-acc_ANN_2G_ACP<-sen_ANN_2G_ACP<-esp_ANN_2G_ACP<-vpp_ANN_2G_ACP<-vpn_ANN_2G_ACP<-matrix(NA,params$repetic,1)
+acc_SVM_3G_KG<-acc_SVM_2G_KG<-sen_SVM_2G_KG<-esp_SVM_2G_KG<-vpp_SVM_2G_KG<-vpn_SVM_2G_KG<-matrix(NA,params$repetic,1)
+acc_SVM_3G_KL<-acc_SVM_2G_KL<-sen_SVM_2G_KL<-esp_SVM_2G_KL<-vpp_SVM_2G_KL<-vpn_SVM_2G_KL<-matrix(NA,params$repetic,1)
+acc_RF_3G<-acc_RF_2G<-sen_RF_2G<-esp_RF_2G<-vpp_RF_2G<-vpn_RF_2G<-matrix(NA,params$repetic,1)
+
+#####
+tabla_acumulada_MLP_3G<-tabla_acumulada_MLP_2G<-0
+tabla_acumulada_KNN_3G<-tabla_acumulada_KNN_2G<-0
+tabla_acumulada_ANN_3G<-tabla_acumulada_ANN_2G<-0
+tabla_acumulada_ANN_3G_ACP<-tabla_acumulada_ANN_2G_ACP<-0
+tabla_acumulada_SVM_3G_KG<-tabla_acumulada_SVM_2G_KG<-0
+tabla_acumulada_SVM_3G_KL<-tabla_acumulada_SVM_2G_KL<-0
+tabla_acumulada_RF_3G<-tabla_acumulada_RF_2G<-0
+#####
+tabla_MLP_2G<-tabla_KNN_2G<-tabla_ANN_2G<-tabla_ANN_2G_ACP<-tabla_SVM_2G_KG<-tabla_SVM_2G_KL<-tabla_RF_2G<-matrix(NA,2,2)
+
+
+# Ejecución con las repeticiones introducidas en el Yaml
+for (i in 1:params$repetic){
+
+set.seed(i*7)  # Ponemos una semilla para que se reproduzcan los resultados
+training <- sample(nrow(datos), round(params$propor*nrow(datos)))
+
+datos_train <- datos[training,]   ### 38 observaciones --> Training dataset
+datos_test  <- datos[-training,]  ### 17 observaciones --> Test dataset
+##### Lo hacemos con el fichero de ACP
+datos_train_acp <- datos_acp[training,]   ### 38 observaciones --> Training dataset
+datos_test_acp  <- datos_acp[-training,]  ### 17 observaciones --> Test dataset
+
+##### Normalizamos los datos de entrenamiento
+normalize <- function(x) {return ((x - min(x)) / (max(x) - min(x)))}
+
+datos_funcion     <- as.data.frame(lapply(datos_train[,1:60], normalize))
+datos_funcion_acp <- as.data.frame(lapply(datos_train_acp[,1:7], normalize))
+
+# Añadimos la variables objetivo al fichero train
+datos_norm_train <- as.data.frame(cbind(datos_funcion, Grupo3     =datos_train$Grupo3, 
+                                                       G3_IS_OH   =datos_train$G3_IS_OH, 
+                                                       G3_IR_OH   =datos_train$G3_IR_OH,
+                                                       G3_DB_OH   =datos_train$G3_DB_OH))      
+
+# Añadimos la variables objetivo al fichero train de acp
+datos_norm_train_acp <- as.data.frame(cbind(datos_funcion_acp, Grupo3     =datos_train_acp$Grupo3, 
+                                                               G3_IS_OH   =datos_train_acp$G3_IS_OH, 
+                                                               G3_IR_OH   =datos_train_acp$G3_IR_OH,
+                                                               G3_DB_OH   =datos_train_acp$G3_DB_OH))
+                                                               
+
+# Vemos que todas las variables oscilan entre 0 y 1: 
+summary(datos_norm_train[,1:7])
+summary(datos_norm_train_acp[,1:7])
+
+# Creamos los ficheros normalizados del conjunto de datos test normalizando con el mínimo y máximo del conjunto de datos training para cada variable
+min_train<-apply(X = datos_train[,1:60], MARGIN = 2, FUN = min) 
+max_train<-apply(X = datos_train[,1:60], MARGIN = 2, FUN = max) 
+#####
+datos_bucle<-as.data.frame(matrix(NA, nrow = 17, ncol = 60))
+
+for(k in 1:60){
+  for(j in 1:17){
+    datos_bucle[j,k]<-(datos_test[j,k]-min_train[k])/(max_train[k]-min_train[k])
+  }
+}
+
+# Ponemos los nombres a las columnas de la matriz: 
+colnames(datos_bucle)<-names(datos_test[,1:60])
+
+# Añadimos la variables objetivo al fichero test
+datos_norm_test <- as.data.frame(cbind(datos_bucle, Grupo3     =datos_test$Grupo3, 
+                                                    G3_IS_OH   =datos_test$G3_IS_OH, 
+                                                    G3_IR_OH   =datos_test$G3_IR_OH,
+                                                    G3_DB_OH   =datos_test$G3_DB_OH))
+                                                    
+# Para la primera ejecución, realizamos los diagramas de cajas y bigotes de los datos train y test normalizados 
+if(i==1){
+   par(mfrow=c(1,2))
+   boxplot(datos_norm_train[,1:60],cex.axis=0.6,ylab='Expresión',main="Variables normalizadas Train",las=2,col="orange")
+   boxplot(datos_norm_test[,1:60],cex.axis=0.6,ylab='Expresión',main="Variables normalizadas Test",las=2,col="orange")
+   par(mfrow=c(1,1))
+}
+
+##################################################################
+# Repetimos el proceso para las 7 variables selecciondas del ACP
+##################################################################
+min_train_acp<-apply(X = datos_train_acp[,1:7], MARGIN = 2, FUN = min)
+max_train_acp<-apply(X = datos_train_acp[,1:7], MARGIN = 2, FUN = max)
+#####
+datos_bucle_acp<-as.data.frame(matrix(NA, nrow = 17, ncol = 7))
+
+for(k in 1:7){
+  for(j in 1:17){
+    datos_bucle_acp[j,k]<-(datos_test_acp[j,k]-min_train_acp[k])/(max_train_acp[k]-min_train_acp[k])
+  }
+}
+                                                    
+# Ponemos los nombres a las columnas de la matriz: 
+colnames(datos_bucle_acp)<-names(datos_test_acp[,1:7])
+# Añadimos la variables objetivo al fichero test de acp
+datos_norm_test_acp <- as.data.frame(cbind(datos_bucle_acp, Grupo3     =datos_test_acp$Grupo3, 
+                                                            G3_IS_OH   =datos_test_acp$G3_IS_OH, 
+                                                            G3_IR_OH   =datos_test_acp$G3_IR_OH,
+                                                            G3_DB_OH   =datos_test_acp$G3_DB_OH))
+
+# Para la primera ejecución, realizamos los diagramas de cajas y bigotes de los datos train y test normalizados del ACP
+if(i==1){
+   par(mfrow=c(1,2))
+   boxplot(datos_norm_train_acp[,1:7],cex.axis=0.6,ylab='Expresión',main="Variables normalizadas Train ACP",las=2,col="orange")
+   boxplot(datos_norm_test_acp[,1:7],cex.axis=0.6,ylab='Expresión',main="Variables normalizadas Test ACP",las=2,col="orange")
+   par(mfrow=c(1,1))
+}
+
+######################################################################
+# Multilayer Perceptron (MLP) for multi-class softmax classification
+######################################################################
+# create model
+x_train<-as.matrix(datos_norm_train[,1:60])
+y_train<-as.matrix(datos_norm_train[,62:64])
+x_test<-as.matrix(datos_norm_test[,1:60])
+y_test<-as.matrix(datos_norm_test[,62:64])
+
+####
+# create model, solo la primera vez
+if (i==1){
+model_3G <- keras_model_sequential()
+
+# define and compile the model
+model_3G %>%
+  layer_dense(units = 64, activation = 'relu', input_shape = c(60)) %>%
+  layer_dropout(rate = 0.5) %>%
+  layer_dense(units = 64, activation = 'relu') %>%
+  layer_dropout(rate = 0.5) %>%
+  layer_dense(units = 3, activation = 'softmax') %>%
+  compile(
+    loss = 'categorical_crossentropy',
+    optimizer = optimizer_sgd(learning_rate = 0.01, decay = 1e-6, momentum = 0.9, nesterov = TRUE),
+    metrics = c('accuracy')
+  )
+
+# Print a summary of a model
+print(summary(model_3G))
+# Get model configuration
+get_config(model_3G)
+# Get layer configuration
+get_layer(model_3G, index = 1)
+# List the model's layers
+model_3G$layers
+# List the input tensors
+model_3G$inputs
+# List the output tensors
+model_3G$outputs
+
+history<-model_3G %>% fit(x_train, y_train, epochs = 60, batch_size = 128)
+plot(history)
+}
+# evaluate
+score <- model_3G %>% evaluate(x_test, y_test, batch_size = 128)
+# En este variable acumulamos los resultados de la accuracy 
+acc_MLP_3G[i]<-as.numeric(score[2])
+#print(score)
+#summary(score)
+
+# Predict the classes for the test data. Ofrece las probabilidades para cada grupo
+test_data_prob <- predict(model_3G, x_test)
+
+# Función para seleccionar la categoría más probable:
+maxidx <- function(arr) {
+  return(which(arr == max(arr)))
+}
+
+# Aplicamos la función al conjunto de datos test para quedarnos con la categoría más probable
+idx <- apply(test_data_prob, 1, maxidx)
+lab.group <- c("IS","IR","DB")
+# Esta variable contiene las categorías de las predicciones
+prediction_MLP_3G <- factor(idx,levels=1:length(lab.group),labels=lab.group) 
+#####
+# Aplicamos la función a las variables one-hot del y_test (que son 3 categorías)
+idx1 <- apply(y_test, 1, maxidx)
+real_MLP_3G <- factor(idx1,levels=1:length(lab.group),labels=lab.group )
+# Acumulamos los resultados
+tabla_acumulada_MLP_3G <- table(prediction_MLP_3G, real_MLP_3G)+tabla_acumulada_MLP_3G
+#####################################################################
+# Convertimos la tabla de 3*3, en una 2*2 unificando IR y DB
+#####################################################################
+##### Posición 1-1
+tabla_MLP_2G[1,1]<-table(prediction_MLP_3G, real_MLP_3G)[1,1]
+##### Posición 1-2
+tabla_MLP_2G[1,2]<-table(prediction_MLP_3G, real_MLP_3G)[1,2]+
+                   table(prediction_MLP_3G, real_MLP_3G)[1,3]
+##### Posición 2-1
+tabla_MLP_2G[2,1]<-table(prediction_MLP_3G, real_MLP_3G)[2,1]+
+                   table(prediction_MLP_3G, real_MLP_3G)[3,1]
+##### Posición 2-2
+tabla_MLP_2G[2,2]<-table(prediction_MLP_3G, real_MLP_3G)[2,2]+
+                   table(prediction_MLP_3G, real_MLP_3G)[3,3]+
+                   table(prediction_MLP_3G, real_MLP_3G)[2,3]+
+                   table(prediction_MLP_3G, real_MLP_3G)[3,2]
+##### Ponemos los nombres a las filas/columnas de la matriz de 2*2
+rownames(tabla_MLP_2G)<-colnames(tabla_MLP_2G)<-c("IS", "IR-DB")
+##### Calculamos los datos de Sensib, Especif, VPP y VPN
+cm_MLP_2G<-confusionMatrix(tabla_MLP_2G, positive = "IR-DB")
+acc_MLP_2G[i]<-cm_MLP_2G$overall[1]   # Accuracy
+sen_MLP_2G[i]<-cm_MLP_2G$byClass[1]   # Sensibilidad
+esp_MLP_2G[i]<-cm_MLP_2G$byClass[2]   # Especificidad
+vpp_MLP_2G[i]<-cm_MLP_2G$byClass[3]   # VPP
+vpn_MLP_2G[i]<-cm_MLP_2G$byClass[4]   # VPN
+# Acumulamos los resultados de 2*2
+tabla_acumulada_MLP_2G <- tabla_MLP_2G+tabla_acumulada_MLP_2G
+
+out <- capture.output(table(prediction_MLP_3G, real_MLP_3G), tabla_MLP_2G)
+cat("MLP cada ejecucion", out, file="./results/tabla_cada_ejecucion_MLP.txt", sep="\n", append=TRUE)
+
+######################################################################
+# Algoritmo de K-Nearest Neighbour para los 3 grupos
+######################################################################
+#Training a model on the data con KNN
+#Empezamos con el modelo KNN, donde vamos a utilizar dos parametros k, por una parte la recomendación de la raíz cuadrada del 
+#tamaño del conjunto de datos: 
+k<-round(sqrt(dim(datos_norm_train)[1]),0)
+prediction_KNN_3G<- knn(train = datos_norm_train[,c(1:60)], test = datos_norm_test[,c(1:60)], cl = datos_norm_train$Grupo3, k=k)
+
+# Para la primera ejecución, se ofrecen los resultados
+if(i==1){
+summary(prediction_KNN_3G)
+}
+##### Calculamos la accuracy
+cm_KNN_3G<-confusionMatrix(prediction_KNN_3G,datos_norm_test$Grupo3)
+acc_KNN_3G[i]<-cm_KNN_3G$overall[1]   # Accuracy
+##### Acumulamos la tabla
+tabla_acumulada_KNN_3G <- table(prediction_KNN_3G, datos_norm_test$Grupo3)+tabla_acumulada_KNN_3G
+
+#####################################################################
+# Convertimos la tabla de 3*3, en una 2*2 unificando IR y DB
+#####################################################################
+##### Posición 1-1
+tabla_KNN_2G[1,1]<-table(prediction_KNN_3G, datos_norm_test$Grupo3)[1,1]
+##### Posición 1-2
+tabla_KNN_2G[1,2]<-table(prediction_KNN_3G, datos_norm_test$Grupo3)[1,2]+
+                   table(prediction_KNN_3G, datos_norm_test$Grupo3)[1,3]
+##### Posición 2-1
+tabla_KNN_2G[2,1]<-table(prediction_KNN_3G, datos_norm_test$Grupo3)[2,1]+
+                   table(prediction_KNN_3G, datos_norm_test$Grupo3)[3,1]
+##### Posición 2-2
+tabla_KNN_2G[2,2]<-table(prediction_KNN_3G, datos_norm_test$Grupo3)[2,2]+
+                   table(prediction_KNN_3G, datos_norm_test$Grupo3)[3,3]+
+                   table(prediction_KNN_3G, datos_norm_test$Grupo3)[2,3]+
+                   table(prediction_KNN_3G, datos_norm_test$Grupo3)[3,2]
+##### Ponemos los nombres a las filas/columnas de la matriz de 2*2
+rownames(tabla_KNN_2G)<-colnames(tabla_KNN_2G)<-c("IS", "IR-DB")
+##### Calculamos los datos de Sensib, Especif, VPP y VPN
+cm_KNN_2G<-confusionMatrix(tabla_KNN_2G, positive = "IR-DB")
+acc_KNN_2G[i]<-cm_KNN_2G$overall[1]   # Accuracy
+sen_KNN_2G[i]<-cm_KNN_2G$byClass[1]   # Sensibilidad
+esp_KNN_2G[i]<-cm_KNN_2G$byClass[2]   # Especificidad
+vpp_KNN_2G[i]<-cm_KNN_2G$byClass[3]   # VPP
+vpn_KNN_2G[i]<-cm_KNN_2G$byClass[4]   # VPN
+
+# Acumulamos los resultados de 2*2
+tabla_acumulada_KNN_2G <- tabla_KNN_2G+tabla_acumulada_KNN_2G
+
+out <- capture.output(table(prediction_KNN_3G, datos_norm_test$Grupo3), tabla_KNN_2G)
+cat("KNN cada ejecucion", out, file="./results/tabla_cada_ejecucion_KNN.txt", sep="\n", append=TRUE)
+
+######################################################################
+# Redes neuronales ANN para los 3 grupos
+######################################################################
+model_ANN_3G<-neuralnet(G3_IS_OH+G3_IR_OH+G3_DB_OH~X34478_at+X33457_at+X39945_at+X38207_at+
+                      X38038_at+X38249_at+X40007_at+X38099_r_at+X32656_at+X31495_at+X41278_at+
+                      X31973_at+ X38790_at+X39052_at+X39923_at+X39507_at+X39356_at+X36660_at+
+                      X40591_at+X40750_at+
+                      X34352_at+X41064_at+ X35670_at+X38905_at+X35124_at+
+                      X38751_i_at+X36237_at+X33932_at+X40459_at+X40311_at+X34990_at+X37139_at+
+                      X38076_at+X32508_at+X32734_at+X34811_at +X36315_i_at+X37254_at+X242_at+
+                      X38110_at+
+                      X41316_s_at+X36988_at+X33329_at+X33372_at+
+                      X35892_at+X39143_at+X36540_at+X36151_at+X32644_at+X31527_at+X32545_r_at+
+                      X41091_at+X31717_at+X34656_at+X36516_at+X39969_at+ X39106_at+X33742_f_at+
+                      X39386_at+X33778_at,
+                      data=datos_norm_train,hidden=c(params$hiddenA,params$hiddenB),linear.output=FALSE,stepmax = 1e7)
+
+
+# Para la primera ejecución, se ofrecen los resultados
+if(i==1){
+   print(summary(model_ANN_3G))
+# visualize the network topology
+  par(mfrow=c(1,1))
+  plot(model_ANN_3G, rep='best')
+  par(mfrow=c(1,1))
+}
+
+# Predict the classes for the test data. Ofrece las probabilidades para cada grupo
+mod_pred_ANN_3G<-compute(model_ANN_3G, datos_norm_test[,1:60])
+# Aplicamos la función al conjunto de datos test para quedarnos con la categoría más probable
+idx_ANN_3G <- apply(mod_pred_ANN_3G$net.result, 1, maxidx)
+prediction_ANN_3G<- factor(idx_ANN_3G,levels = c(1,2,3),labels = c("IS", "IR", "DB"))
+##### Calculamos la accuracy
+cm_ANN_3G<-confusionMatrix(prediction_ANN_3G,datos_norm_test$Grupo3)
+acc_ANN_3G[i]<-cm_ANN_3G$overall[1]   # Accuracy
+##### Acumulamos la tabla
+tabla_acumulada_ANN_3G <- table(prediction_ANN_3G, datos_norm_test$Grupo3)+tabla_acumulada_ANN_3G
+
+#####################################################################
+# Convertimos la tabla de 3*3, en una 2*2 unificando IR y DB
+#####################################################################
+##### Posición 1-1
+tabla_ANN_2G[1,1]<-table(prediction_ANN_3G, datos_norm_test$Grupo3)[1,1]
+##### Posición 1-2
+tabla_ANN_2G[1,2]<-table(prediction_ANN_3G, datos_norm_test$Grupo3)[1,2]+
+                   table(prediction_ANN_3G, datos_norm_test$Grupo3)[1,3]
+##### Posición 2-1
+tabla_ANN_2G[2,1]<-table(prediction_ANN_3G, datos_norm_test$Grupo3)[2,1]+
+                   table(prediction_ANN_3G, datos_norm_test$Grupo3)[3,1]
+##### Posición 2-2
+tabla_ANN_2G[2,2]<-table(prediction_ANN_3G, datos_norm_test$Grupo3)[2,2]+
+                   table(prediction_ANN_3G, datos_norm_test$Grupo3)[3,3]+
+                   table(prediction_ANN_3G, datos_norm_test$Grupo3)[2,3]+
+                   table(prediction_ANN_3G, datos_norm_test$Grupo3)[3,2]
+##### Ponemos los nombres a las filas/columnas de la matriz de 2*2
+rownames(tabla_ANN_2G)<-colnames(tabla_ANN_2G)<-c("IS", "IR-DB")
+##### Calculamos los datos de Sensib, Especif, VPP y VPN
+cm_ANN_2G<-confusionMatrix(tabla_ANN_2G, positive = "IR-DB")
+acc_ANN_2G[i]<-cm_ANN_2G$overall[1]   # Accuracy
+sen_ANN_2G[i]<-cm_ANN_2G$byClass[1]   # Sensibilidad
+esp_ANN_2G[i]<-cm_ANN_2G$byClass[2]   # Especificidad
+vpp_ANN_2G[i]<-cm_ANN_2G$byClass[3]   # VPP
+vpn_ANN_2G[i]<-cm_ANN_2G$byClass[4]   # VPN
+
+# Acumulamos los resultados de 2*2
+tabla_acumulada_ANN_2G <- tabla_ANN_2G+tabla_acumulada_ANN_2G
+
+out <- capture.output( table(prediction_ANN_3G, datos_norm_test$Grupo3), tabla_ANN_2G)
+cat("ANN cada ejecucion", out, file="./results/tabla_cada_ejecucion_ANN.txt", sep="\n", append=TRUE)
+
+######################################################################
+# Redes neuronales ANN para los 3 grupos con el fichero de ACP
+######################################################################
+model_ANN_3G_ACP<-neuralnet(G3_IS_OH+G3_IR_OH+G3_DB_OH~PC1+PC2+PC3+PC4+PC5+PC6+PC7,
+                      data=datos_norm_train_acp,hidden=c(5,3),linear.output=FALSE,stepmax = 1e7)
+
+# Para la primera ejecución, se ofrecen los resultados
+if(i==1){
+  print(summary(model_ANN_3G_ACP))
+# visualize the network topology
+  par(mfrow=c(1,1))
+  plot(model_ANN_3G_ACP, rep='best')
+  par(mfrow=c(1,1))
+}
+
+# Predict the classes for the test data. Ofrece las probabilidades para cada grupo
+mod_pred_ANN_3G_ACP<-compute(model_ANN_3G_ACP, datos_norm_test_acp[,1:7])
+# Aplicamos la función al conjunto de datos test para quedarnos con la categoría más probable
+idx_ANN_3G_ACP <- apply(mod_pred_ANN_3G_ACP$net.result, 1, maxidx)
+prediction_ANN_3G_ACP<- factor(idx_ANN_3G_ACP,levels = c(1,2,3),labels = c("IS", "IR", "DB"))
+##### Calculamos la accuracy
+cm_ANN_3G_ACP<-confusionMatrix(prediction_ANN_3G_ACP,datos_norm_test_acp$Grupo3)
+acc_ANN_3G_ACP[i]<-cm_ANN_3G_ACP$overall[1]   # Accuracy
+##### Acumulamos la tabla
+tabla_acumulada_ANN_3G_ACP <- table(prediction_ANN_3G_ACP, datos_norm_test_acp$Grupo3)+tabla_acumulada_ANN_3G_ACP
+
+#####################################################################
+# Convertimos la tabla de 3*3, en una 2*2 unificando IR y DB
+#####################################################################
+##### Posición 1-1
+tabla_ANN_2G_ACP[1,1]<-table(prediction_ANN_3G_ACP, datos_norm_test_acp$Grupo3)[1,1]
+##### Posición 1-2
+tabla_ANN_2G_ACP[1,2]<-table(prediction_ANN_3G_ACP, datos_norm_test_acp$Grupo3)[1,2]+
+                       table(prediction_ANN_3G_ACP, datos_norm_test_acp$Grupo3)[1,3]
+##### Posición 2-1
+tabla_ANN_2G_ACP[2,1]<-table(prediction_ANN_3G_ACP, datos_norm_test_acp$Grupo3)[2,1]+
+                       table(prediction_ANN_3G_ACP, datos_norm_test_acp$Grupo3)[3,1]
+##### Posición 2-2
+tabla_ANN_2G_ACP[2,2]<-table(prediction_ANN_3G_ACP, datos_norm_test_acp$Grupo3)[2,2]+
+                       table(prediction_ANN_3G_ACP, datos_norm_test_acp$Grupo3)[3,3]+
+                       table(prediction_ANN_3G_ACP, datos_norm_test_acp$Grupo3)[2,3]+
+                       table(prediction_ANN_3G_ACP, datos_norm_test_acp$Grupo3)[3,2]
+##### Ponemos los nombres a las filas/columnas de la matriz de 2*2
+rownames(tabla_ANN_2G_ACP)<-colnames(tabla_ANN_2G_ACP)<-c("IS", "IR-DB")
+##### Calculamos los datos de Sensib, Especif, VPP y VPN
+cm_ANN_2G_ACP<-confusionMatrix(tabla_ANN_2G_ACP, positive = "IR-DB")
+acc_ANN_2G_ACP[i]<-cm_ANN_2G_ACP$overall[1]   # Accuracy
+sen_ANN_2G_ACP[i]<-cm_ANN_2G_ACP$byClass[1]   # Sensibilidad
+esp_ANN_2G_ACP[i]<-cm_ANN_2G_ACP$byClass[2]   # Especificidad
+vpp_ANN_2G_ACP[i]<-cm_ANN_2G_ACP$byClass[3]   # VPP
+vpn_ANN_2G_ACP[i]<-cm_ANN_2G_ACP$byClass[4]   # VPN
+# Acumulamos los resultados de 2*2
+tabla_acumulada_ANN_2G_ACP <- tabla_ANN_2G_ACP+tabla_acumulada_ANN_2G_ACP
+
+out <- capture.output(table(prediction_ANN_3G_ACP, datos_norm_test_acp$Grupo3), tabla_ANN_2G_ACP)
+cat("ANN_ACP cada ejecucion", out, file="./results/tabla_cada_ejecucion_ANN_ACP.txt", sep="\n", append=TRUE)
+
+
+#######################################################################################
+# Algoritmo de SVM con el paquete kernlab para los 3 grupos. Gaussiano
+#######################################################################################
+mod_SVM_KG_3G<-ksvm(Grupo3 ~ X34478_at+X33457_at+X39945_at+X38207_at+
+                             X38038_at+X38249_at+X40007_at+X38099_r_at+X32656_at+X31495_at+X41278_at+
+                             X31973_at+ X38790_at+X39052_at+X39923_at+X39507_at+X39356_at+X36660_at+
+                             X40591_at+X40750_at+
+                             X34352_at+X41064_at+ X35670_at+X38905_at+X35124_at+
+                             X38751_i_at+X36237_at+X33932_at+X40459_at+X40311_at+X34990_at+X37139_at+
+                             X38076_at+X32508_at+X32734_at+X34811_at +X36315_i_at+X37254_at+X242_at+
+                             X38110_at+
+                             X41316_s_at+X36988_at+X33329_at+X33372_at+
+                             X35892_at+X39143_at+X36540_at+X36151_at+X32644_at+X31527_at+X32545_r_at+
+                             X41091_at+X31717_at+X34656_at+X36516_at+X39969_at+ X39106_at+X33742_f_at+
+                             X39386_at+X33778_at,
+                             data=datos_norm_train,kernel = "rbfdot", C = 1)  # Kernel gaussiano
+
+# Para la primera ejecución, se ofrecen los resultados
+if(i==1){
+  print(summary(mod_SVM_KG_3G))
+}                              
+
+colnames(datos_norm_test)<-colnames(datos_norm_train)
+prediction_SVM_3G_KG <- predict(mod_SVM_KG_3G, datos_norm_test)  
+# Predicciones del modelo gaussino
+##### Calculamos la accuracy
+cm_SVM_3G_KG<-confusionMatrix(prediction_SVM_3G_KG,datos_norm_test$Grupo3)
+acc_SVM_3G_KG[i]<-cm_SVM_3G_KG$overall[1]   # Accuracy
+##### Acumulamos la tabla
+tabla_acumulada_SVM_3G_KG<- table(prediction_SVM_3G_KG, datos_norm_test$Grupo3)+tabla_acumulada_SVM_3G_KG
+
+#####################################################################
+# Convertimos la tabla de 3*3, en una 2*2 unificando IR y DB
+#####################################################################
+##### Posición 1-1
+tabla_SVM_2G_KG[1,1]<-table(prediction_SVM_3G_KG, datos_norm_test$Grupo3)[1,1]
+##### Posición 1-2
+tabla_SVM_2G_KG[1,2]<-table(prediction_SVM_3G_KG, datos_norm_test$Grupo3)[1,2]+
+                      table(prediction_SVM_3G_KG, datos_norm_test$Grupo3)[1,3]
+##### Posición 2-1
+tabla_SVM_2G_KG[2,1]<-table(prediction_SVM_3G_KG, datos_norm_test$Grupo3)[2,1]+
+                      table(prediction_SVM_3G_KG, datos_norm_test$Grupo3)[3,1]
+##### Posición 2-2
+tabla_SVM_2G_KG[2,2]<-table(prediction_SVM_3G_KG, datos_norm_test$Grupo3)[2,2]+
+                      table(prediction_SVM_3G_KG, datos_norm_test$Grupo3)[3,3]+
+                      table(prediction_SVM_3G_KG, datos_norm_test$Grupo3)[2,3]+
+                      table(prediction_SVM_3G_KG, datos_norm_test$Grupo3)[3,2]
+##### Ponemos los nombres a las filas/columnas de la matriz de 2*2
+rownames(tabla_SVM_2G_KG)<-colnames(tabla_SVM_2G_KG)<-c("IS", "IR-DB")
+##### Calculamos los datos de Sensib, Especif, VPP y VPN
+cm_SVM_2G_KG<-confusionMatrix(tabla_SVM_2G_KG, positive = "IR-DB")
+acc_SVM_2G_KG[i]<-cm_SVM_2G_KG$overall[1]   # Accuracy
+sen_SVM_2G_KG[i]<-cm_SVM_2G_KG$byClass[1]   # Sensibilidad
+esp_SVM_2G_KG[i]<-cm_SVM_2G_KG$byClass[2]   # Especificidad
+vpp_SVM_2G_KG[i]<-cm_SVM_2G_KG$byClass[3]   # VPP
+vpn_SVM_2G_KG[i]<-cm_SVM_2G_KG$byClass[4]   # VPN
+# Acumulamos los resultados de 2*2
+tabla_acumulada_SVM_2G_KG <- tabla_SVM_2G_KG+tabla_acumulada_SVM_2G_KG
+
+out <- capture.output(table(prediction_SVM_3G_KG, datos_norm_test$Grupo3), tabla_SVM_2G_KG)
+cat("SVM_KG cada ejecucion", out, file="./results/tabla_cada_ejecucion_SVM_KG.txt", sep="\n", append=TRUE)
+
+#######################################################################################
+# Algoritmo de SVM con el paquete kernlab para los 3 grupos. Lineal
+#######################################################################################
+mod_SVM_KG_3L<-ksvm(Grupo3 ~ X34478_at+X33457_at+X39945_at+X38207_at+
+                             X38038_at+X38249_at+X40007_at+X38099_r_at+X32656_at+X31495_at+X41278_at+
+                             X31973_at+ X38790_at+X39052_at+X39923_at+X39507_at+X39356_at+X36660_at+
+                             X40591_at+X40750_at+
+                             X34352_at+X41064_at+ X35670_at+X38905_at+X35124_at+
+                             X38751_i_at+X36237_at+X33932_at+X40459_at+X40311_at+X34990_at+X37139_at+
+                             X38076_at+X32508_at+X32734_at+X34811_at +X36315_i_at+X37254_at+X242_at+
+                             X38110_at+
+                             X41316_s_at+X36988_at+X33329_at+X33372_at+
+                             X35892_at+X39143_at+X36540_at+X36151_at+X32644_at+X31527_at+X32545_r_at+
+                             X41091_at+X31717_at+X34656_at+X36516_at+X39969_at+ X39106_at+X33742_f_at+
+                             X39386_at+X33778_at,
+                             data=datos_norm_train,kernel = "vanilladot", C = 1)  # Kernel lineal
+
+
+
+
+
+
+# Para la primera ejecución, se ofrecen los resultados
+if(i==1){
+  print(summary(mod_SVM_KG_3L))
+}                              
+
+prediction_SVM_3G_KL <- predict(mod_SVM_KG_3L, datos_norm_test)   # Predicciones del modelo gaussino
+##### Calculamos la accuracy
+cm_SVM_3G_KL<-confusionMatrix(prediction_SVM_3G_KL,datos_norm_test$Grupo3)
+acc_SVM_3G_KL[i]<-cm_SVM_3G_KL$overall[1]   # Accuracy
+##### Acumulamos la tabla
+tabla_acumulada_SVM_3G_KL<- table(prediction_SVM_3G_KL, datos_norm_test$Grupo3)+tabla_acumulada_SVM_3G_KL
+
+#####################################################################
+# Convertimos la tabla de 3*3, en una 2*2 unificando IR y DB
+#####################################################################
+##### Posición 1-1
+tabla_SVM_2G_KL[1,1]<-table(prediction_SVM_3G_KL, datos_norm_test$Grupo3)[1,1]
+##### Posición 1-2
+tabla_SVM_2G_KL[1,2]<-table(prediction_SVM_3G_KL, datos_norm_test$Grupo3)[1,2]+
+                      table(prediction_SVM_3G_KL, datos_norm_test$Grupo3)[1,3]
+##### Posición 2-1
+tabla_SVM_2G_KL[2,1]<-table(prediction_SVM_3G_KL, datos_norm_test$Grupo3)[2,1]+
+                      table(prediction_SVM_3G_KL, datos_norm_test$Grupo3)[3,1]
+##### Posición 2-2
+tabla_SVM_2G_KL[2,2]<-table(prediction_SVM_3G_KL, datos_norm_test$Grupo3)[2,2]+
+                      table(prediction_SVM_3G_KL, datos_norm_test$Grupo3)[3,3]+
+                      table(prediction_SVM_3G_KL, datos_norm_test$Grupo3)[2,3]+
+                      table(prediction_SVM_3G_KL, datos_norm_test$Grupo3)[3,2]
+##### Ponemos los nombres a las filas/columnas de la matriz de 2*2
+rownames(tabla_SVM_2G_KL)<-colnames(tabla_SVM_2G_KL)<-c("IS", "IR-DB")
+##### Calculamos los datos de Sensib, Especif, VPP y VPN
+cm_SVM_2G_KL<-confusionMatrix(tabla_SVM_2G_KL, positive = "IR-DB")
+acc_SVM_2G_KL[i]<-cm_SVM_2G_KL$overall[1]   # Accuracy
+sen_SVM_2G_KL[i]<-cm_SVM_2G_KL$byClass[1]   # Sensibilidad
+esp_SVM_2G_KL[i]<-cm_SVM_2G_KL$byClass[2]   # Especificidad
+vpp_SVM_2G_KL[i]<-cm_SVM_2G_KL$byClass[3]   # VPP
+vpn_SVM_2G_KL[i]<-cm_SVM_2G_KL$byClass[4]   # VPN
+# Acumulamos los resultados de 2*2
+tabla_acumulada_SVM_2G_KL <- tabla_SVM_2G_KL+tabla_acumulada_SVM_2G_KL
+
+out <- capture.output(table(prediction_SVM_3G_KL, datos_norm_test$Grupo3), tabla_SVM_2G_KL)
+cat("SVM_KL cada ejecucion", out, file="./results/tabla_cada_ejecucion_SVM_KL.txt", sep="\n", append=TRUE)
+
+#######################################################################################
+# Algoritmo de Random Forest para los 3 grupos
+#######################################################################################
+mod_rf_3G <- randomForest(Grupo3~X34478_at+X33457_at+X39945_at+X38207_at+
+                             X38038_at+X38249_at+X40007_at+X38099_r_at+X32656_at+X31495_at+X41278_at+
+                             X31973_at+ X38790_at+X39052_at+X39923_at+X39507_at+X39356_at+X36660_at+
+                             X40591_at+X40750_at+
+                             X34352_at+X41064_at+ X35670_at+X38905_at+X35124_at+
+                             X38751_i_at+X36237_at+X33932_at+X40459_at+X40311_at+X34990_at+X37139_at+
+                             X38076_at+X32508_at+X32734_at+X34811_at +X36315_i_at+X37254_at+X242_at+
+                             X38110_at+
+                             X41316_s_at+X36988_at+X33329_at+X33372_at+
+                             X35892_at+X39143_at+X36540_at+X36151_at+X32644_at+X31527_at+X32545_r_at+
+                             X41091_at+X31717_at+X34656_at+X36516_at+X39969_at+ X39106_at+X33742_f_at+
+                             X39386_at+X33778_at,
+                          data=datos_norm_train)
+
+if(i==1){
+  print(summary(mod_rf_3G))
+  mod_rf_3G$ntree
+  mod_rf_3G$mtry
+  plot(mod_rf_3G)
+# Importancia de las variables
+  sort(importance(mod_rf_3G))
+  varImpPlot(mod_rf_3G)
+}
+
+prediction_RF_3G<-predict(mod_rf_3G, newdata = datos_norm_test[,(1:60)], type="response")
+##### Calculamos la accuracy
+cm_RF_3G<-confusionMatrix(prediction_RF_3G,datos_norm_test$Grupo3)
+acc_RF_3G[i]<-cm_RF_3G$overall[1]   # Accuracy
+##### Acumulamos la tabla
+tabla_acumulada_RF_3G<- table(prediction_RF_3G, datos_norm_test$Grupo3)+tabla_acumulada_RF_3G
+
+#####################################################################
+# Convertimos la tabla de 3*3, en una 2*2 unificando IR y DB
+#####################################################################
+##### Posición 1-1
+tabla_RF_2G[1,1]<-table(prediction_RF_3G, datos_norm_test$Grupo3)[1,1]
+##### Posición 1-2
+tabla_RF_2G[1,2]<-table(prediction_RF_3G, datos_norm_test$Grupo3)[1,2]+
+                  table(prediction_RF_3G, datos_norm_test$Grupo3)[1,3]
+##### Posición 2-1
+tabla_RF_2G[2,1]<-table(prediction_RF_3G, datos_norm_test$Grupo3)[2,1]+
+                  table(prediction_RF_3G, datos_norm_test$Grupo3)[3,1]
+##### Posición 2-2
+tabla_RF_2G[2,2]<-table(prediction_RF_3G, datos_norm_test$Grupo3)[2,2]+
+                  table(prediction_RF_3G, datos_norm_test$Grupo3)[3,3]+
+                  table(prediction_RF_3G, datos_norm_test$Grupo3)[2,3]+
+                  table(prediction_RF_3G, datos_norm_test$Grupo3)[3,2]
+##### Ponemos los nombres a las filas/columnas de la matriz de 2*2
+rownames(tabla_RF_2G)<-colnames(tabla_RF_2G)<-c("IS", "IR-DB")
+##### Calculamos los datos de Sensib, Especif, VPP y VPN
+cm_RF_2G<-confusionMatrix(tabla_RF_2G, positive = "IR-DB")
+acc_RF_2G[i]<-cm_RF_2G$overall[1]   # Accuracy
+sen_RF_2G[i]<-cm_RF_2G$byClass[1]   # Sensibilidad
+esp_RF_2G[i]<-cm_RF_2G$byClass[2]   # Especificidad
+vpp_RF_2G[i]<-cm_RF_2G$byClass[3]   # VPP
+vpn_RF_2G[i]<-cm_RF_2G$byClass[4]   # VPN
+# Acumulamos los resultados de 2*2
+tabla_acumulada_RF_2G <- tabla_RF_2G+tabla_acumulada_RF_2G
+
+out <- capture.output(table(prediction_RF_3G, datos_norm_test$Grupo3), tabla_RF_2G)
+cat("RF cada ejecucion", out, file="./results/tabla_cada_ejecucion_RF.txt", sep="\n", append=TRUE)
+
+}
+
+```
+
+
+En relación a la técnica de RF, el resultado indica que el bosque aleatorio incluyó `r mod_rf_3G$ntree` árboles y probó `r mod_rf_3G$mtry` variables en cada división. La línea negra representa el OOB, la línea roja es el error al intentar predecir la variable objetivo, y la línea verde es el error en la predicción de la localización. 
+
+
+
+## Resultados  
+
+```{r resultados de la matriz acumulada de las 1000 ejecuciones (17000 registros),include=FALSE}
+##### Exactitud de los 3 grupos partiendo de la matriz acumulada  (17000 registros)
+acc_MLP_acu<-round(sum(diag(tabla_acumulada_MLP_3G))/sum(tabla_acumulada_MLP_3G)*100,2)
+acc_KNN_acu<-round(sum(diag(tabla_acumulada_KNN_3G))/sum(tabla_acumulada_KNN_3G)*100,2)
+acc_ANN_acu<-round(sum(diag(tabla_acumulada_ANN_3G))/sum(tabla_acumulada_ANN_3G)*100,2)
+acc_ANN_ACP_acu<-round(sum(diag(tabla_acumulada_ANN_3G_ACP))/sum(tabla_acumulada_ANN_3G_ACP)*100,2)
+acc_SVM_KG_acu<-round(sum(diag(tabla_acumulada_SVM_3G_KG))/sum(tabla_acumulada_SVM_3G_KG)*100,2)
+acc_SVM_KL_acu<-round(sum(diag(tabla_acumulada_SVM_3G_KL))/sum(tabla_acumulada_SVM_3G_KL)*100,2)
+acc_RF_acu<-round(sum(diag(tabla_acumulada_RF_3G))/sum(tabla_acumulada_RF_3G)*100,2)
+
+##### Calculamos los datos de Sensib, Especif, VPP y VPN acumulados para MLP (17000 registros)
+cm_MLP_2G_acu<-confusionMatrix(tabla_acumulada_MLP_2G, positive = "IR-DB")
+acc_MLP_2G_acu<-round(cm_MLP_2G_acu$overall[1]*100,2)   # Accuracy
+sen_MLP_acu<-round(cm_MLP_2G_acu$byClass[1]*100,2)   # Sensibilidad
+esp_MLP_acu<-round(cm_MLP_2G_acu$byClass[2]*100,2)   # Especificidad
+vpp_MLP_acu<-round(cm_MLP_2G_acu$byClass[3]*100,2)   # VPP
+vpn_MLP_acu<-round(cm_MLP_2G_acu$byClass[4]*100,2)   # VPN
+
+##### Calculamos los datos de Sensib, Especif, VPP y VPN acumulados para KNN (17000 registros)
+cm_KNN_2G_acu<-confusionMatrix(tabla_acumulada_KNN_2G, positive = "IR-DB")
+acc_KNN_2G_acu<-round(cm_KNN_2G_acu$overall[1]*100,2)   # Accuracy
+sen_KNN_acu<-round(cm_KNN_2G_acu$byClass[1]*100,2)   # Sensibilidad
+esp_KNN_acu<-round(cm_KNN_2G_acu$byClass[2]*100,2)   # Especificidad
+vpp_KNN_acu<-round(cm_KNN_2G_acu$byClass[3]*100,2)   # VPP
+vpn_KNN_acu<-round(cm_KNN_2G_acu$byClass[4]*100,2)   # VPN
+
+##### Calculamos los datos de Sensib, Especif, VPP y VPN acumulados para ANN (17000 registros)
+cm_ANN_2G_acu<-confusionMatrix(tabla_acumulada_ANN_2G, positive = "IR-DB")
+acc_ANN_2G_acu<-round(cm_ANN_2G_acu$overall[1]*100,2)   # Accuracy
+sen_ANN_acu<-round(cm_ANN_2G_acu$byClass[1]*100,2)   # Sensibilidad
+esp_ANN_acu<-round(cm_ANN_2G_acu$byClass[2]*100,2)   # Especificidad
+vpp_ANN_acu<-round(cm_ANN_2G_acu$byClass[3]*100,2)   # VPP
+vpn_ANN_acu<-round(cm_ANN_2G_acu$byClass[4]*100,2)   # VPN
+
+##### Calculamos los datos de Sensib, Especif, VPP y VPN acumulados para ANN-ACP (17000 registros)
+cm_ANN_ACP_2G_acu<-confusionMatrix(tabla_acumulada_ANN_2G_ACP, positive = "IR-DB")
+acc_ANN_ACP_2G_acu<-round(cm_ANN_ACP_2G_acu$overall[1]*100,2)   # Accuracy
+sen_ANN_A_acu<-round(cm_ANN_ACP_2G_acu$byClass[1]*100,2)   # Sensibilidad
+esp_ANN_A_acu<-round(cm_ANN_ACP_2G_acu$byClass[2]*100,2)   # Especificidad
+vpp_ANN_A_acu<-round(cm_ANN_ACP_2G_acu$byClass[3]*100,2)   # VPP
+vpn_ANN_A_acu<-round(cm_ANN_ACP_2G_acu$byClass[4]*100,2)   # VPN
+
+##### Calculamos los datos de Sensib, Especif, VPP y VPN acumulados para SVM GAUSSIANO (17000 registros)
+cm_SVM_KG_2G_acu<-confusionMatrix(tabla_acumulada_SVM_2G_KG, positive = "IR-DB")
+acc_SVM_KG_2G_acu<-round(cm_SVM_KG_2G_acu$overall[1]*100,2)   # Accuracy
+sen_SVM_KG_acu<-round(cm_SVM_KG_2G_acu$byClass[1]*100,2)   # Sensibilidad
+esp_SVM_KG_acu<-round(cm_SVM_KG_2G_acu$byClass[2]*100,2)   # Especificidad
+vpp_SVM_KG_acu<-round(cm_SVM_KG_2G_acu$byClass[3]*100,2)   # VPP
+vpn_SVM_KG_acu<-round(cm_SVM_KG_2G_acu$byClass[4]*100,2)   # VPN
+
+##### Calculamos los datos de Sensib, Especif, VPP y VPN acumulados para SVM Lineal (17000 registros)
+cm_SVM_KL_2G_acu<-confusionMatrix(tabla_acumulada_SVM_2G_KL, positive = "IR-DB")
+acc_SVM_KL_2G_acu<-round(cm_SVM_KL_2G_acu$overall[1]*100,2)   # Accuracy
+sen_SVM_KL_acu<-round(cm_SVM_KL_2G_acu$byClass[1]*100,2)   # Sensibilidad
+esp_SVM_KL_acu<-round(cm_SVM_KL_2G_acu$byClass[2]*100,2)   # Especificidad
+vpp_SVM_KL_acu<-round(cm_SVM_KL_2G_acu$byClass[3]*100,2)  # VPP
+vpn_SVM_KL_acu<-round(cm_SVM_KL_2G_acu$byClass[4]*100,2)   # VPN
+
+##### Calculamos los datos de Sensib, Especif, VPP y VPN acumulados para RF (17000 registros)
+cm_RF_2G_acu<-confusionMatrix(tabla_acumulada_RF_2G, positive = "IR-DB")
+acc_RF_2G_acu<-round(cm_RF_2G_acu$overall[1]*100,2)   # Accuracy
+sen_RF_acu<-round(cm_RF_2G_acu$byClass[1]*100,2)   # Sensibilidad
+esp_RF_acu<-round(cm_RF_2G_acu$byClass[2]*100,2)   # Especificidad
+vpp_RF_acu<-round(cm_RF_2G_acu$byClass[3]*100,2)   # VPP
+vpn_RF_acu<-round(cm_RF_2G_acu$byClass[4]*100,2)   # VPN
+
+```
+
+```{r resultados como la media de cada uno de los resultados de las 1000 ejecuciones,include=FALSE}
+##### Exactitud de los tres grupos como media de las 1000 ejecuciones
+acc_MLP_med    <-round(mean(acc_MLP_3G*100, na.rm = TRUE),2)
+acc_KNN_med    <-round(mean(acc_KNN_3G*100, na.rm = TRUE),2)
+acc_ANN_med    <-round(mean(acc_ANN_3G*100, na.rm = TRUE),2)
+acc_ANN_A_med<-round(mean(acc_ANN_3G_ACP*100, na.rm = TRUE),2)
+acc_SVM_KG_med <-round(mean(acc_SVM_3G_KG*100, na.rm = TRUE),2)
+acc_SVM_KL_med <-round(mean(acc_SVM_3G_KL*100, na.rm = TRUE),2)
+acc_RF_med     <-round(mean(acc_RF_3G*100, na.rm = TRUE),2)
+
+##### Exactitud de los dos grupos como media de las 1000 ejecuciones
+acc_MLP_2G_med    <-round(mean(acc_MLP_2G*100, na.rm = TRUE),2)
+acc_KNN_2G_med    <-round(mean(acc_KNN_2G*100, na.rm = TRUE),2)
+acc_ANN_2G_med    <-round(mean(acc_ANN_2G*100, na.rm = TRUE),2)
+acc_ANN_A_2G_med<-round(mean(acc_ANN_2G_ACP*100, na.rm = TRUE),2)
+acc_SVM_KG_2G_med <-round(mean(acc_SVM_2G_KG*100, na.rm = TRUE),2)
+acc_SVM_KL_2G_med <-round(mean(acc_SVM_2G_KL*100, na.rm = TRUE),2)
+acc_RF_2G_med     <-round(mean(acc_RF_2G*100, na.rm = TRUE),2)
+
+##### Sensibilidad de los dos grupos como media de las 1000 ejeciciones
+sen_MLP_med<-round(mean(sen_MLP_2G*100, na.rm = TRUE),2)
+sen_KNN_med<-round(mean(sen_KNN_2G*100, na.rm = TRUE),2)
+sen_ANN_med<-round(mean(sen_ANN_2G*100, na.rm = TRUE),2)
+sen_ANN_A_med<-round(mean(sen_ANN_2G_ACP*100, na.rm = TRUE),2)
+sen_SVM_KG_med<-round(mean(sen_SVM_2G_KG*100, na.rm = TRUE),2)
+sen_SVM_KL_med<-round(mean(sen_SVM_2G_KL*100, na.rm = TRUE),2)
+sen_RF_med<-round(mean(sen_RF_2G*100, na.rm = TRUE),2)
+
+##### Especificidad de los dos grupos como media de las 1000 ejeciciones
+esp_MLP_med<-round(mean(esp_MLP_2G*100, na.rm = TRUE),2)
+esp_KNN_med<-round(mean(esp_KNN_2G*100, na.rm = TRUE),2)
+esp_ANN_med<-round(mean(esp_ANN_2G*100, na.rm = TRUE),2)
+esp_ANN_A_med<-round(mean(esp_ANN_2G_ACP*100, na.rm = TRUE),2)
+esp_SVM_KG_med<-round(mean(esp_SVM_2G_KG*100, na.rm = TRUE),2)
+esp_SVM_KL_med<-round(mean(esp_SVM_2G_KL*100, na.rm = TRUE),2)
+esp_RF_med<-round(mean(esp_RF_2G*100, na.rm = TRUE),2)
+
+##### VPP
+vpp_MLP_med<-round(mean(vpp_MLP_2G*100, na.rm = TRUE),2)
+vpp_KNN_med<-round(mean(vpp_KNN_2G*100, na.rm = TRUE),2)
+vpp_ANN_med<-round(mean(vpp_ANN_2G*100, na.rm = TRUE),2)
+vpp_ANN_A_med<-round(mean(vpp_ANN_2G_ACP*100, na.rm = TRUE),2)
+vpp_SVM_KG_med<-round(mean(vpp_SVM_2G_KG*100, na.rm = TRUE),2)
+vpp_SVM_KL_med<-round(mean(vpp_SVM_2G_KL*100, na.rm = TRUE),2)
+vpp_RF_med<-round(mean(vpp_RF_2G*100, na.rm = TRUE),2)
+
+##### VPN
+vpn_MLP_med<-round(mean(vpn_MLP_2G*100, na.rm = TRUE),2)
+vpn_KNN_med<-round(mean(vpn_KNN_2G*100, na.rm = TRUE),2)
+vpn_ANN_med<-round(mean(vpn_ANN_2G*100, na.rm = TRUE),2)
+vpn_ANN_A_med<-round(mean(vpn_ANN_2G_ACP*100, na.rm = TRUE),2)
+vpn_SVM_KG_med<-round(mean(vpn_SVM_2G_KG*100, na.rm = TRUE),2)
+vpn_SVM_KL_med<-round(mean(vpn_SVM_2G_KL*100, na.rm = TRUE),2)
+vpn_RF_med<-round(mean(vpn_RF_2G*100, na.rm = TRUE),2)
+
+write.csv(cbind(acc_MLP_3G,    acc_MLP_2G,    sen_MLP_2G,    esp_MLP_2G,    vpp_MLP_2G,    vpn_MLP_2G),  
+          file = "./results/Salida datos MLP.csv")
+write.csv(cbind(acc_KNN_3G,    acc_KNN_2G,    sen_KNN_2G,    esp_KNN_2G,    vpp_KNN_2G,    vpn_KNN_2G),    
+          file = "./results/Salida datos KNN.csv")
+write.csv(cbind(acc_ANN_3G,    acc_ANN_2G,    sen_ANN_2G,    esp_ANN_2G,    vpp_ANN_2G,    vpn_ANN_2G), 
+          file = "./results/Salida datos ANN.csv")
+write.csv(cbind(acc_ANN_3G_ACP,acc_ANN_2G_ACP,sen_ANN_2G_ACP,esp_ANN_2G_ACP,vpp_ANN_2G_ACP,vpn_ANN_2G_ACP),
+          file = "./results/Salida datos ANN_ACP.csv")
+write.csv(cbind(acc_SVM_3G_KG, acc_SVM_2G_KG, sen_SVM_2G_KG, esp_SVM_2G_KG, vpp_SVM_2G_KG, vpn_SVM_2G_KG), 
+          file = "./results/Salida datos SVM_KG.csv")
+write.csv(cbind(acc_SVM_3G_KL, acc_SVM_2G_KL, sen_SVM_2G_KL, esp_SVM_2G_KL, vpp_SVM_2G_KL, vpn_SVM_2G_KL), 
+          file = "./results/Salida datos SVM_KL.csv")
+write.csv(cbind(acc_RF_3G,     acc_RF_2G,     sen_RF_2G,     esp_RF_2G,     vpp_RF_2G,     vpn_RF_2G),     
+          file = "./results/Salida datos RF.csv")
+##########################
+out <- capture.output(tabla_acumulada_MLP_3G, tabla_acumulada_MLP_2G)
+cat("MLP", out, file="./results/tabla_acumulada_MLP.txt", sep="\n", append=FALSE)
+##### 
+out <- capture.output(tabla_acumulada_KNN_3G, tabla_acumulada_KNN_2G)
+cat("KNN", out, file="./results/tabla_acumulada_KNN.txt", sep="\n", append=FALSE)
+#####
+out <- capture.output(tabla_acumulada_ANN_3G, tabla_acumulada_ANN_2G)
+cat("ANN", out, file="./results/tabla_acumulada_ANN.txt", sep="\n", append=FALSE)
+#####
+out <- capture.output(tabla_acumulada_ANN_3G_ACP,tabla_acumulada_ANN_2G_ACP)
+cat("ANN_ACP", out, file="./results/tabla_acumulada_ANN_ACP.txt", sep="\n", append=FALSE)
+#####
+out <- capture.output(tabla_acumulada_SVM_3G_KG,tabla_acumulada_SVM_2G_KG)
+cat("SVM-G", out, file="./results/tabla_acumulada_SVM_KG.txt", sep="\n", append=FALSE)
+#####
+out <- capture.output(tabla_acumulada_SVM_3G_KL,tabla_acumulada_SVM_2G_KL)
+cat("SVM-L", out, file="./results/tabla_acumulada_SVM_KL.txt", sep="\n", append=FALSE)
+#####
+out <- capture.output(tabla_acumulada_RF_3G,tabla_acumulada_RF_2G)
+cat("RF", out, file="./results/tabla_acumulada_RF.txt", sep="\n", append=FALSE)
+#####
+```
+
+
+A continuación y despues de **`r params$repetic`** ejecuciones, se construye una tabla con las técnicas útilizadas y la exactitud obtenida para la predicción de los 3 grupos calculada de dos formas distintas: 
+
+En primer lugar, se muestran los resultados obtenidos a través de una matriz de confusión con 17000 (17x1000) registros que se ha ido **acumulando tras cada una de las 1000 ejecuciones.** 
+La exactitud de 2 grupos se refiere a la exactitud obtenida tras unificar en la matriz de confusión 3x3 las categorías IR y DB.
+
+| **Técnica**    | **Exactitud 3G**  | **Exactitud 2G**  | **Sens**  | **Espec**  | **VPP**  | **VPN**  |  
+| ---------------|:------------------- |:---------------------- |:------------------ |:------------------ |:----------------- |:----------------- |
+| MLP            | `r acc_MLP_acu`     | `r acc_MLP_2G_acu`     | `r sen_MLP_acu`    | `r esp_MLP_acu`    |`r vpp_MLP_acu`    |`r vpn_MLP_acu`    |
+| KNN            | `r acc_KNN_acu`     | `r acc_KNN_2G_acu`     | `r sen_KNN_acu`    | `r esp_KNN_acu`    |`r vpp_KNN_acu`    |`r vpn_KNN_acu`    |
+| ANN            | `r acc_ANN_acu`     | `r acc_ANN_2G_acu`     | `r sen_ANN_acu`    | `r esp_ANN_acu`    |`r vpp_ANN_acu`    |`r vpn_ANN_acu`    |
+| ANN - PCA      | `r acc_ANN_ACP_acu` | `r acc_ANN_ACP_2G_acu` | `r sen_ANN_A_acu`  | `r esp_ANN_A_acu`  |`r vpp_ANN_A_acu`  |`r vpn_ANN_A_acu`  |
+| SVM-radial     | `r acc_SVM_KG_acu`  | `r acc_SVM_KG_2G_acu`  | `r sen_SVM_KG_acu` | `r esp_SVM_KG_acu` |`r vpp_SVM_KG_acu` |`r vpn_SVM_KG_acu` |
+| SVM-lineal     | `r acc_SVM_KL_acu`  | `r acc_SVM_KL_2G_acu`  | `r sen_SVM_KL_acu` | `r esp_SVM_KL_acu` |`r vpp_SVM_KL_acu` |`r vpn_SVM_KL_acu` |
+| RF (500 trees) | `r acc_RF_acu`      | `r acc_RF_2G_acu`      | `r sen_RF_acu`     | `r esp_RF_acu`     |`r vpp_RF_acu`     |`r vpn_RF_acu`     |
+
+A continuación y despues de **`r params$repetic`** ejecuciones, se construye una tabla con las técnicas útilizadas y se presenta la **media de la exactitud, sensibilidad, especificidad, vpp y vpn obtenida para en cada una de las 1000 ejecuciones.** 
+
+| **Técnica**    | **Exactitud 3G**  | **Exactitud 2G**  | **Sens**  | **Espec**  | **VPP**  | **VPN**  |  
+| ---------------|:------------------ |:--------------------  |:------------------ |:------------------ |:----------------- |:----------------- |
+| MLP            | `r acc_MLP_med`    | `r acc_MLP_2G_med`    | `r sen_MLP_med`    | `r esp_MLP_med`    |`r vpp_MLP_med`    |`r vpn_MLP_med`    |
+| KNN            | `r acc_KNN_med`    | `r acc_KNN_2G_med`    | `r sen_KNN_med`    | `r esp_KNN_med`    |`r vpp_KNN_med`    |`r vpn_KNN_med`    |
+| ANN            | `r acc_ANN_med`    | `r acc_ANN_2G_med`    | `r sen_ANN_med`    | `r esp_ANN_med`    |`r vpp_ANN_med`    |`r vpn_ANN_med`    |
+| ANN - PCA      | `r acc_ANN_A_med`  | `r acc_ANN_A_2G_med`  | `r sen_ANN_A_med`  | `r esp_ANN_A_med`  |`r vpp_ANN_A_med`  |`r vpn_ANN_A_med`  |
+| SVM-radial     | `r acc_SVM_KG_med` | `r acc_SVM_KG_2G_med` | `r sen_SVM_KG_med` | `r esp_SVM_KG_med` |`r vpp_SVM_KG_med` |`r vpn_SVM_KG_med` |
+| SVM-lineal     | `r acc_SVM_KL_med` | `r acc_SVM_KL_2G_med` | `r sen_SVM_KL_med` | `r esp_SVM_KL_med` |`r vpp_SVM_KL_med` |`r vpn_SVM_KL_med` |
+| RF (500 trees) | `r acc_RF_med`     | `r acc_RF_2G_med`     | `r sen_RF_med`     | `r esp_RF_med`     |`r vpp_RF_med`     |`r vpn_RF_med`     |
+
+# Información de la sesión
+
+```{r Información de la sesión}
+sessionInfo()
+
+```
+
+
+# Referencias
+
